@@ -14,24 +14,6 @@ curl -fsSL https://raw.githubusercontent.com/Aqr-K/XrayR-Script/main/install.sh 
 --config-token {YOUR_PRIVATE_CONFIG_REPO_TOKEN}
 ```
 
-**推荐的更安全的使用方法是分步执行：**
-
-1.  **下载脚本**
-    ```bash
-    curl -fL "https://raw.githubusercontent.com/Aqr-K/XrayR-Script/main/install.sh" -o install.sh
-    ```
-
-2.  **（可选但强烈建议）审查脚本内容**
-    ```bash
-    less install.sh
-    ```
-
-3.  **赋予权限并执行**
-    ```bash
-    chmod +x install.sh
-    ./install.sh --mode install [其他参数...]
-    ```
-
 ---
 
 ## 📄 许可证 (License)
