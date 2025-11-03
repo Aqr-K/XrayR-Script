@@ -212,7 +212,7 @@ function download_file() {
         rm -f "$out" # 清理空文件
         exit 1
     fi
-    DEBUG "文件下载成功: $out"
+    DEBUG "文件下载成功: $out" 
 }
 
 # 检查操作系统和架构
@@ -791,7 +791,7 @@ function setup_systemd_service() {
 		Type=simple
 		Restart=always
 		RestartSec=5s
-		ExecStart=${XRAYR_BIN_DIR}/XrayR -config ${CONFIG_DIR}/config.yml
+		ExecStart=${XRAYR_BIN_DIR}/XrayR --config ${CONFIG_DIR}/config.yml
 		WorkingDirectory=${XRAYR_BIN_DIR}/
 		[Install]
 		WantedBy=multi-user.target
@@ -816,7 +816,7 @@ function setup_openrc_service() {
     $priv_cmd tee "$service_path" >/dev/null <<-EOF
 		#!/sbin/openrc-run
 		command="${XRAYR_BIN_DIR}/XrayR"
-		command_args="-config ${CONFIG_DIR}/config.yml"
+		command_args="--config ${CONFIG_DIR}/config.yml"
 		command_background=true
 		directory="${XRAYR_BIN_DIR}"
 		pidfile="/run/\${RC_SVCNAME}.pid"
@@ -846,7 +846,7 @@ function setup_launchd_service() {
 		    <key>ProgramArguments</key>
 		    <array>
 		        <string>${XRAYR_BIN_DIR}/XrayR</string>
-		        <string>-config</string>
+		        <string>--config</string>
 		        <string>${CONFIG_DIR}/config.yml</string>
 		    </array>
 		    <key>WorkingDirectory</key><string>${XRAYR_BIN_DIR}/</string>
@@ -876,7 +876,7 @@ function setup_rcd_service_freebsd() {
 		name="xrayr"
 		rcvar="xrayr_enable"
 		command="${XRAYR_BIN_DIR}/XrayR"
-		command_args="-config ${CONFIG_DIR}/config.yml &"
+		command_args="--config ${CONFIG_DIR}/config.yml &"
 		load_rc_config \$name
 		run_rc_command "\$1"
 	EOF
@@ -900,7 +900,7 @@ function setup_rcd_service_openbsd() {
     $priv_cmd tee "$rcd_path" >/dev/null <<-EOF
 		#!/bin/ksh
 		daemon="${XRAYR_BIN_DIR}/XrayR"
-		daemon_flags="-config ${CONFIG_DIR}/config.yml"
+		daemon_flags="--config ${CONFIG_DIR}/config.yml"
 		. /etc/rc.d/rc.subr
 		rc_cmd "\$1"
 	EOF
@@ -920,7 +920,7 @@ function setup_termux_service() {
     mkdir -p "$service_dir" "$service_dir/log"
     cat > "$service_dir/run" <<-EOF
 		#!/data/data/com.termux/files/usr/bin/sh
-		exec ${XRAYR_BIN_DIR}/XrayR -config ${CONFIG_DIR}/config.yml
+		exec ${XRAYR_BIN_DIR}/XrayR --config ${CONFIG_DIR}/config.yml
 	EOF
     chmod +x "$service_dir/run"
     cat > "$service_dir/log/run" <<-EOF
