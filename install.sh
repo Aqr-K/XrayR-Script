@@ -798,6 +798,7 @@ function setup_systemd_service() {
 	EOF
     $priv_cmd chmod 644 "$service_path"
     $priv_cmd systemctl daemon-reload
+	$priv_cmd systemctl enable XrayR
     INFO "systemd 服务设置完成。"
 }
 
