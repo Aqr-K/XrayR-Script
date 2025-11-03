@@ -212,7 +212,7 @@ function download_file() {
         rm -f "$out" # 清理空文件
         exit 1
     fi
-    DEBUG "文件下载成功: $out" 
+    DEBUG "文件下载成功: $out"
 }
 
 # 检查操作系统和架构
