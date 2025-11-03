@@ -1593,11 +1593,13 @@ function main() {
         shift
     done   
 
-    # 检查是否传入了 XrayR 仓库地址
-    if [[ -z "$XRAYR_REPO_URL" ]]; then
-        ERROR "必须提供 XrayR 仓库地址。请使用 -rr <repo_url> 参数指定。"
-        print_usage
-        exit 1
+    # 如果是 install 模式或者 update-core 模式，检查是否传入了 XrayR 仓库地址
+    if [[ "$INSTALL_MODE" == "install" || "$INSTALL_MODE" == "update-core" ]]; then
+        if [[ -z "$XRAYR_REPO_URL" ]]; then
+            ERROR "在安装或更新核心程序时，必须提供 XrayR 仓库地址。"
+            WARN "请使用 -rr <repo_url> 参数指定仓库地址。"
+            exit 1
+        fi
     fi
 
     # 检查 root 权限
