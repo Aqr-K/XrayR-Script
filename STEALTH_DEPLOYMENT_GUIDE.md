@@ -437,7 +437,25 @@ sudo bash migrate.sh --old-bin-name cdn-service --old-install-path /opt/cdn \
 
 ---
 
-## 推荐的隐蔽部署体系
+### 推荐的隐蔽部署体系
+
+#### 硬编码 Service 检测（全平台）
+
+迁移脚本在以下所有平台上都会检测旧 Service 文件是否为硬编码版本：
+
+| 平台 | Service 文件位置 | 检测方法 |
+|------|-----------------|--------|
+| **systemd** (Linux) | `/etc/systemd/system/${SERVICE}.service` | 检查是否含 `source *.install_config` |
+| **OpenRC** (Alpine/Alpine-based) | `/etc/init.d/${SERVICE}` | 检查是否含 `source *.install_config` |
+| **launchd** (macOS) | `/Library/LaunchDaemons/com.${SERVICE}.plist` | 检查是否含 `install_config` 或进程名变量 |
+| **FreeBSD rc.d** | `/usr/local/etc/rc.d/${SERVICE}` | 检查是否含 `source *.install_config` |
+| **OpenBSD rc.d** | `/etc/rc.d/${SERVICE}` | 检查是否含 `source *.install_config` |
+| **Termux** | `$HOME/.termux/service/${SERVICE}/run` | 检查是否含 `source *.install_config` |
+
+若检测到硬编码版本，脚本会拒绝迁移并提示用户：
+```bash
+sudo bash install.sh -s ${NEW_SERVICE_NAME}
+```
 
 ### 最小化足迹方案
 

@@ -277,6 +277,75 @@ function check_migration_needed() {
     echo $need_migration
 }
 
+# 检测旧 Service 文件是否为硬编码版本（全平台支持）
+function check_old_service_hardcoding() {
+    local is_hardcoded=0
+    local service_file=""
+    
+    # systemd (Linux with systemd)
+    if command -v systemctl &> /dev/null; then
+        service_file="/etc/systemd/system/${OLD_SERVICE_NAME}.service"
+        if [[ -f "$service_file" ]]; then
+            if ! grep -q "source.*\.install_config" "$service_file"; then
+                is_hardcoded=1
+            fi
+        fi
+    fi
+    
+    # OpenRC (Alpine, Debian without systemd)
+    if [[ $is_hardcoded -eq 0 ]] && [[ -f "/etc/init.d/${OLD_SERVICE_NAME}" ]]; then
+        service_file="/etc/init.d/${OLD_SERVICE_NAME}"
+        if ! grep -q "source.*\.install_config" "$service_file"; then
+            is_hardcoded=1
+        fi
+    fi
+    
+    # macOS launchd
+    if [[ $is_hardcoded -eq 0 ]] && [[ -f "/Library/LaunchDaemons/com.${OLD_SERVICE_NAME}.plist" ]]; then
+        service_file="/Library/LaunchDaemons/com.${OLD_SERVICE_NAME}.plist"
+        # plist 格式不同，检查是否包含动态配置相关的标记
+        if ! grep -q "install_config\|XRAY_PROCESS_NAME" "$service_file"; then
+            is_hardcoded=1
+        fi
+    fi
+    
+    # FreeBSD rc.d
+    if [[ $is_hardcoded -eq 0 ]] && [[ -f "/usr/local/etc/rc.d/${OLD_SERVICE_NAME}" ]]; then
+        service_file="/usr/local/etc/rc.d/${OLD_SERVICE_NAME}"
+        if ! grep -q "source.*\.install_config" "$service_file"; then
+            is_hardcoded=1
+        fi
+    fi
+    
+    # OpenBSD rc.d
+    if [[ $is_hardcoded -eq 0 ]] && [[ -f "/etc/rc.d/${OLD_SERVICE_NAME}" ]]; then
+        service_file="/etc/rc.d/${OLD_SERVICE_NAME}"
+        if ! grep -q "source.*\.install_config" "$service_file"; then
+            is_hardcoded=1
+        fi
+    fi
+    
+    # Termux service
+    if [[ $is_hardcoded -eq 0 ]] && [[ -f "$HOME/.termux/service/${OLD_SERVICE_NAME}/run" ]]; then
+        service_file="$HOME/.termux/service/${OLD_SERVICE_NAME}/run"
+        if ! grep -q "source.*\.install_config" "$service_file"; then
+            is_hardcoded=1
+        fi
+    fi
+    
+    # 如果检测到硬编码，发出警告并退出
+    if [[ $is_hardcoded -eq 1 ]]; then
+        WARN "检测到硬编码版本的 Service 文件: $service_file"
+        WARN "此 Service 文件仍使用旧的硬编码方式，需要重新生成为动态版本"
+        WARN ""
+        WARN "请运行以下命令完成升级："
+        WARN "  sudo bash install.sh -s ${NEW_SERVICE_NAME}"
+        WARN ""
+        WARN "或手动删除旧 Service 文件，下次启动时自动生成动态版本。"
+        exit 1
+    fi
+}
+
 # 显示迁移摘要
 function show_migration_summary() {
     echo ""
@@ -641,22 +710,8 @@ function main() {
     # 显示摘要
     show_migration_summary
     
-    # 检测旧 Service 文件版本（硬编码 vs 动态）
-    if command -v systemctl &> /dev/null; then
-        local old_service_file="/etc/systemd/system/${OLD_SERVICE_NAME}.service"
-        if [[ -f "$old_service_file" ]]; then
-            if ! grep -q "source.*\.install_config" "$old_service_file"; then
-                WARN "检测到硬编码版本的 Service 文件"
-                WARN "此 Service 文件仍使用旧的硬编码方式，需要重新生成为动态版本"
-                WARN ""
-                WARN "请运行以下命令完成升级："
-                WARN "  sudo bash install.sh -s ${NEW_SERVICE_NAME}"
-                WARN ""
-                WARN "或手动删除旧 Service 文件，由 systemd 重新启动时自动生成。"
-                exit 1
-            fi
-        fi
-    fi
+    # 检测旧 Service 文件版本（硬编码 vs 动态）- 全平台支持
+    check_old_service_hardcoding
     
     # 检查是否需要执行实际迁移
     NEED_MIGRATION=$(check_migration_needed)
