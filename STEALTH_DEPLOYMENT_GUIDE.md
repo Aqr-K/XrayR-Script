@@ -186,12 +186,12 @@ sudo bash migrate.sh \
 
 ## .install_config 存放位置规则
 
-| 场景 | 命令 | .install_config 位置 | 说明 |
-|------|------|------------------|------|
-| 只补全，不改路径 | `migrate.sh --old-* (仅)` | `/etc/XrayR/.install_config` | 继承旧的配置路径 |
-| 指定新配置路径 | `migrate.sh --old-* --to-config-path /etc/new` | `/etc/new/.install_config` | 使用显式指定的路径 |
-| 指定新安装路径但不指定配置路径 | `migrate.sh --old-* --to-install-path /opt/new` | `/etc/XrayR/.install_config` | 智能默认（标准位置）*见下表 |
-| 完全迁移所有参数 | `migrate.sh --old-* --to-install-path /opt/n --to-config-path /etc/n` | `/etc/n/.install_config` | 使用显式指定的配置路径 |
+| 场景                           | 命令                                                                  | .install_config 位置         | 说明                        |
+| ------------------------------ | --------------------------------------------------------------------- | ---------------------------- | --------------------------- |
+| 只补全，不改路径               | `migrate.sh --old-* (仅)`                                             | `/etc/XrayR/.install_config` | 继承旧的配置路径            |
+| 指定新配置路径                 | `migrate.sh --old-* --to-config-path /etc/new`                        | `/etc/new/.install_config`   | 使用显式指定的路径          |
+| 指定新安装路径但不指定配置路径 | `migrate.sh --old-* --to-install-path /opt/new`                       | `/etc/XrayR/.install_config` | 智能默认（标准位置）*见下表 |
+| 完全迁移所有参数               | `migrate.sh --old-* --to-install-path /opt/n --to-config-path /etc/n` | `/etc/n/.install_config`     | 使用显式指定的配置路径      |
 
 ### 智能默认规则
 
@@ -443,14 +443,14 @@ sudo bash migrate.sh --old-bin-name cdn-service --old-install-path /opt/cdn \
 
 迁移脚本在以下所有平台上都会检测旧 Service 文件是否为硬编码版本：
 
-| 平台 | Service 文件位置 | 检测方法 |
-|------|-----------------|--------|
-| **systemd** (Linux) | `/etc/systemd/system/${SERVICE}.service` | 检查是否含 `source *.install_config` |
-| **OpenRC** (Alpine/Alpine-based) | `/etc/init.d/${SERVICE}` | 检查是否含 `source *.install_config` |
-| **launchd** (macOS) | `/Library/LaunchDaemons/com.${SERVICE}.plist` | 检查是否含 `install_config` 或进程名变量 |
-| **FreeBSD rc.d** | `/usr/local/etc/rc.d/${SERVICE}` | 检查是否含 `source *.install_config` |
-| **OpenBSD rc.d** | `/etc/rc.d/${SERVICE}` | 检查是否含 `source *.install_config` |
-| **Termux** | `$HOME/.termux/service/${SERVICE}/run` | 检查是否含 `source *.install_config` |
+| 平台                             | Service 文件位置                              | 检测方法                                 |
+| -------------------------------- | --------------------------------------------- | ---------------------------------------- |
+| **systemd** (Linux)              | `/etc/systemd/system/${SERVICE}.service`      | 检查是否含 `source *.install_config`     |
+| **OpenRC** (Alpine/Alpine-based) | `/etc/init.d/${SERVICE}`                      | 检查是否含 `source *.install_config`     |
+| **launchd** (macOS)              | `/Library/LaunchDaemons/com.${SERVICE}.plist` | 检查是否含 `install_config` 或进程名变量 |
+| **FreeBSD rc.d**                 | `/usr/local/etc/rc.d/${SERVICE}`              | 检查是否含 `source *.install_config`     |
+| **OpenBSD rc.d**                 | `/etc/rc.d/${SERVICE}`                        | 检查是否含 `source *.install_config`     |
+| **Termux**                       | `$HOME/.termux/service/${SERVICE}/run`        | 检查是否含 `source *.install_config`     |
 
 若检测到硬编码版本，脚本会拒绝迁移并提示用户：
 ```bash
