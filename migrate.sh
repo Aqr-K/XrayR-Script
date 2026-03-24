@@ -219,9 +219,19 @@ function verify_old_binary() {
 function prepare_new_config() {
     NEW_BIN_NAME="${NEW_BIN_NAME:-$OLD_BIN_NAME}"
     NEW_INSTALL_PATH="${NEW_INSTALL_PATH:-$OLD_INSTALL_PATH}"
-    NEW_CONFIG_PATH="${NEW_CONFIG_PATH:-$OLD_CONFIG_PATH}"
     NEW_PROCESS_NAME="${NEW_PROCESS_NAME:-$OLD_PROCESS_NAME}"
     NEW_SERVICE_NAME="${NEW_SERVICE_NAME:-$OLD_SERVICE_NAME}"
+    
+    # NEW_CONFIG_PATH 的智能默认值
+    # 如果显式指定了新安装路径或其他新参数，配置路径默认为标准位置
+    # 否则继承旧的配置路径
+    if [[ -n "$NEW_INSTALL_PATH_OVERRIDE" || -n "$NEW_BIN_NAME" || -n "$NEW_PROCESS_NAME" || -n "$NEW_SERVICE_NAME" ]]; then
+        # 用户指定了新参数，配置路径默认为标准位置（除非显式指定）
+        NEW_CONFIG_PATH="${NEW_CONFIG_PATH:-/etc/XrayR}"
+    else
+        # 用户没有指定新参数，继承旧的配置路径
+        NEW_CONFIG_PATH="${NEW_CONFIG_PATH:-$OLD_CONFIG_PATH}"
+    fi
     
     # 规范化路径
     NEW_INSTALL_PATH="$(get_absolute_path "$NEW_INSTALL_PATH")"
@@ -233,6 +243,38 @@ function prepare_new_config() {
     INFO "  配置路径: $NEW_CONFIG_PATH"
     INFO "  进程名: $NEW_PROCESS_NAME"
     INFO "  Service 名: $NEW_SERVICE_NAME"
+}
+
+# 检测是否需要执行实际迁移（如果配置完全相同，只补全.install_config）
+function check_migration_needed() {
+    local need_migration=0
+    
+    if [[ "$OLD_BIN_NAME" != "$NEW_BIN_NAME" ]]; then
+        INFO "✓ 二进制名改变：需要迁移"
+        need_migration=1
+    fi
+    
+    if [[ "$OLD_INSTALL_PATH" != "$NEW_INSTALL_PATH" ]]; then
+        INFO "✓ 安装路径改变：需要迁移"
+        need_migration=1
+    fi
+    
+    if [[ "$OLD_CONFIG_PATH" != "$NEW_CONFIG_PATH" ]]; then
+        INFO "✓ 配置路径改变：需要迁移"
+        need_migration=1
+    fi
+    
+    if [[ "$OLD_SERVICE_NAME" != "$NEW_SERVICE_NAME" ]]; then
+        INFO "✓ Service 名改变：需要迁移"
+        need_migration=1
+    fi
+    
+    # 进程名改变不需要迁移（只需重启即可），但为了完整性记录
+    if [[ "$OLD_PROCESS_NAME" != "$NEW_PROCESS_NAME" ]]; then
+        INFO "ℹ 进程名改变：只需重启服务"
+    fi
+    
+    echo $need_migration
 }
 
 # 显示迁移摘要
@@ -600,21 +642,41 @@ function main() {
         fi
     fi
     
-    # 执行迁移
-    stop_service
-    cleanup_old_service
-    migrate_binary
-    migrate_config
-    update_install_config
-    start_service
+    # 检查是否需要执行实际迁移
+    NEED_MIGRATION=$(check_migration_needed)
     
-    echo ""
-    INFO "迁移完成！"
-    INFO "新配置信息："
-    INFO "  二进制位置: ${NEW_INSTALL_PATH}/${NEW_BIN_NAME}"
-    INFO "  配置位置: ${NEW_CONFIG_PATH}"
-    INFO "  进程名: ${NEW_PROCESS_NAME}"
-    echo ""
+    if [[ $NEED_MIGRATION -eq 0 ]]; then
+        # 配置完全相同，只补全 .install_config（不停止/启动服务）
+        INFO ""
+        INFO "检测到新旧配置相同，跳过服务重启。"
+        INFO "仅更新 .install_config 文件..."
+        update_install_config
+        
+        echo ""
+        INFO "配置文件补全完成！"
+        INFO "配置位置: ${NEW_CONFIG_PATH}/.install_config"
+        echo ""
+    else
+        # 配置改变，执行完整迁移
+        INFO ""
+        INFO "检测到配置改变，执行完整迁移..."
+        
+        # 执行迁移
+        stop_service
+        cleanup_old_service
+        migrate_binary
+        migrate_config
+        update_install_config
+        start_service
+        
+        echo ""
+        INFO "迁移完成！"
+        INFO "新配置信息："
+        INFO "  二进制位置: ${NEW_INSTALL_PATH}/${NEW_BIN_NAME}"
+        INFO "  配置位置: ${NEW_CONFIG_PATH}"
+        INFO "  进程名: ${NEW_PROCESS_NAME}"
+        echo ""
+    fi
 }
 
 main "$@"
