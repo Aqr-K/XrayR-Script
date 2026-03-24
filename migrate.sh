@@ -4,7 +4,7 @@
 #
 #  迁移工具 (migrate.sh)
 #
-#  功能: 将已安装的 Xrayr 迁移到新位置、新名称、新进程名
+#  功能: 将已安装的 Xra二进制 迁移到新位置、新名称、新进程名
 #  用处: 支持离线迁移二进制文件，更新 service 配置，更新进程名等
 #
 #  使用示例:
@@ -45,7 +45,7 @@ function WARN() {
 
 # 源配置（从 .install_config 读取）
 OLD_BIN_NAME=""
-OLD_INSTALL_PATH=""
+OLD_BIN_DIR=""
 OLD_CONFIG_PATH=""
 OLD_PROCESS_NAME=""
 OLD_SERVICE_NAME=""
@@ -64,7 +64,7 @@ DEBUG_MODE=false
 
 # 旧配置参数覆盖（用于命令行指定）
 OLD_BIN_NAME_OVERRIDE=""
-OLD_INSTALL_PATH_OVERRIDE=""
+OLD_BIN_DIR_OVERRIDE=""
 OLD_CONFIG_PATH_OVERRIDE=""
 OLD_PROCESS_NAME_OVERRIDE=""
 OLD_SERVICE_NAME_OVERRIDE=""
@@ -145,22 +145,19 @@ function load_old_config() {
         INFO "读取旧配置: $CONFIG_FILE"
         source "$CONFIG_FILE"
         
-        # 从配置文件中提取变量（注意旧文件中可能使用 XRAY_INSTALL_PATH 键名）
+        # 从配置文件中提取变量
         OLD_BIN_NAME="${XRAY_BIN_NAME:-XrayR}"
-        OLD_INSTALL_PATH="${XRAY_INSTALL_PATH:-${OLD_INSTALL_PATH}}"
-        OLD_CONFIG_PATH="${XRAY_CONFIG_PATH:-${OLD_CONFIG_PATH}}"
+        OLD_BIN_DIR="${XRAYR_BIN_DIR:-/usr/local/XrayR}"
+        OLD_CONFIG_PATH="${CONFIG_DIR:-/etc/XrayR}"
         OLD_PROCESS_NAME="${XRAY_PROCESS_NAME:-XrayR}"
         OLD_SERVICE_NAME="${XRAY_SERVICE_NAME:-xrayr}"
-        
-        # 备用字段名兼容性
-        OLD_INSTALL_PATH="${OLD_INSTALL_PATH:-$(grep '^XRAYR_BIN_DIR=' "$CONFIG_FILE" | cut -d= -f2)}"
     else
         # 配置文件不存在时，使用默认值作为旧配置
         WARN "配置文件不存在: $CONFIG_FILE"
         INFO "使用默认安装配置..."
         
         OLD_BIN_NAME="XrayR"
-        OLD_INSTALL_PATH="/usr/local/XrayR"
+        OLD_BIN_DIR="/usr/local/XrayR"
         OLD_CONFIG_PATH="/etc/XrayR"
         OLD_PROCESS_NAME="XrayR"
         OLD_SERVICE_NAME="xrayr"
@@ -168,23 +165,23 @@ function load_old_config() {
     
     # 允许通过参数覆盖（命令行参数优先级最高）
     OLD_BIN_NAME="${OLD_BIN_NAME_OVERRIDE:-$OLD_BIN_NAME}"
-    OLD_INSTALL_PATH="${OLD_INSTALL_PATH_OVERRIDE:-$OLD_INSTALL_PATH}"
+    OLD_BIN_DIR="${OLD_BIN_DIR_OVERRIDE:-$OLD_BIN_DIR}"
     OLD_CONFIG_PATH="${OLD_CONFIG_PATH_OVERRIDE:-$OLD_CONFIG_PATH}"
     OLD_PROCESS_NAME="${OLD_PROCESS_NAME_OVERRIDE:-$OLD_PROCESS_NAME}"
     OLD_SERVICE_NAME="${OLD_SERVICE_NAME_OVERRIDE:-$OLD_SERVICE_NAME}"
     
     # 验证二进制文件存在，如果不存在则尝试查找
-    if [[ ! -f "${OLD_INSTALL_PATH}/${OLD_BIN_NAME}" ]]; then
+    if [[ ! -f "${OLD_BIN_DIR}/${OLD_BIN_NAME}" ]]; then
         # 尝试在安装路径中查找任何 XrayR 相关的可执行文件
         local found_bin
-        found_bin=$(find "$OLD_INSTALL_PATH" -maxdepth 1 -type f -executable -name "XrayR*" -o -name "*service*" 2>/dev/null | head -1)
+        found_bin=$(find "$OLD_BIN_DIR" -maxdepth 1 -type f -executable -name "XrayR*" -o -name "*service*" 2>/dev/null | head -1)
         
         if [[ -n "$found_bin" ]]; then
             OLD_BIN_NAME="$(basename "$found_bin")"
             WARN "自动检测到二进制文件: $OLD_BIN_NAME"
         else
             # 如果仍然找不到，显示错误和帮助信息
-            ERROR "无法找到旧的二进制文件: ${OLD_INSTALL_PATH}/${OLD_BIN_NAME}"
+            ERROR "无法找到旧的二进制文件: ${OLD_BIN_DIR}/${OLD_BIN_NAME}"
             ERROR "支持的操作："
             ERROR "  1. 创建 $CONFIG_FILE 文件并指定正确的配置"
             ERROR "  2. 使用命令行参数手动指定旧配置："
@@ -199,7 +196,7 @@ function load_old_config() {
     
     INFO "旧配置已加载:"
     INFO "  二进制名: $OLD_BIN_NAME"
-    INFO "  安装路径: $OLD_INSTALL_PATH"
+    INFO "  安装路径: $OLD_BIN_DIR"
     INFO "  配置路径: $OLD_CONFIG_PATH"
     INFO "  进程名: $OLD_PROCESS_NAME"
     INFO "  Service 名: $OLD_SERVICE_NAME"
@@ -207,7 +204,7 @@ function load_old_config() {
 
 # 验证旧二进制文件存在
 function verify_old_binary() {
-    local old_bin="${OLD_INSTALL_PATH}/${OLD_BIN_NAME}"
+    local old_bin="${OLD_BIN_DIR}/${OLD_BIN_NAME}"
     if [[ ! -f "$old_bin" ]]; then
         ERROR "旧二进制文件不存在: $old_bin"
         exit 1
@@ -217,19 +214,24 @@ function verify_old_binary() {
 
 # 准备新配置（如果未指定则继承旧值）
 function prepare_new_config() {
+    # 先检查用户是否指定了新参数
+    local has_new_params=0
+    if [[ -n "$NEW_BIN_NAME" || -n "$NEW_INSTALL_PATH" || -n "$NEW_PROCESS_NAME" || -n "$NEW_SERVICE_NAME" ]]; then
+        has_new_params=1
+    fi
+    
+    # 设置默认值（如果未指定）
     NEW_BIN_NAME="${NEW_BIN_NAME:-$OLD_BIN_NAME}"
-    NEW_INSTALL_PATH="${NEW_INSTALL_PATH:-$OLD_INSTALL_PATH}"
+    NEW_INSTALL_PATH="${NEW_INSTALL_PATH:-$OLD_BIN_DIR}"
     NEW_PROCESS_NAME="${NEW_PROCESS_NAME:-$OLD_PROCESS_NAME}"
     NEW_SERVICE_NAME="${NEW_SERVICE_NAME:-$OLD_SERVICE_NAME}"
     
     # NEW_CONFIG_PATH 的智能默认值
-    # 如果显式指定了新安装路径或其他新参数，配置路径默认为标准位置
+    # 如果用户指定了新参数，配置路径默认为标准位置 /etc/XrayR（除非显式指定）
     # 否则继承旧的配置路径
-    if [[ -n "$NEW_INSTALL_PATH_OVERRIDE" || -n "$NEW_BIN_NAME" || -n "$NEW_PROCESS_NAME" || -n "$NEW_SERVICE_NAME" ]]; then
-        # 用户指定了新参数，配置路径默认为标准位置（除非显式指定）
+    if [[ $has_new_params -eq 1 ]]; then
         NEW_CONFIG_PATH="${NEW_CONFIG_PATH:-/etc/XrayR}"
     else
-        # 用户没有指定新参数，继承旧的配置路径
         NEW_CONFIG_PATH="${NEW_CONFIG_PATH:-$OLD_CONFIG_PATH}"
     fi
     
@@ -254,7 +256,7 @@ function check_migration_needed() {
         need_migration=1
     fi
     
-    if [[ "$OLD_INSTALL_PATH" != "$NEW_INSTALL_PATH" ]]; then
+    if [[ "$OLD_BIN_DIR" != "$NEW_INSTALL_PATH" ]]; then
         INFO "✓ 安装路径改变：需要迁移"
         need_migration=1
     fi
@@ -359,10 +361,10 @@ function show_migration_summary() {
         echo "二进制名: $OLD_BIN_NAME (不变)"
     fi
     
-    if [[ "$OLD_INSTALL_PATH" != "$NEW_INSTALL_PATH" ]]; then
-        echo "安装路径: $OLD_INSTALL_PATH → $NEW_INSTALL_PATH"
+    if [[ "$OLD_BIN_DIR" != "$NEW_INSTALL_PATH" ]]; then
+        echo "安装路径: $OLD_BIN_DIR → $NEW_INSTALL_PATH"
     else
-        echo "安装路径: $OLD_INSTALL_PATH (不变)"
+        echo "安装路径: $OLD_BIN_DIR (不变)"
     fi
     
     if [[ "$OLD_CONFIG_PATH" != "$NEW_CONFIG_PATH" ]]; then
@@ -471,7 +473,7 @@ function stop_service() {
 
 # 迁移二进制文件
 function migrate_binary() {
-    local old_bin="${OLD_INSTALL_PATH}/${OLD_BIN_NAME}"
+    local old_bin="${OLD_BIN_DIR}/${OLD_BIN_NAME}"
     local new_bin="${NEW_INSTALL_PATH}/${NEW_BIN_NAME}"
     
     # 如果路径和名称都没变，则跳过
@@ -502,7 +504,7 @@ function migrate_binary() {
     chmod +x "$new_bin"
     
     # 可选：删除或保留旧文件
-    if [[ "$OLD_INSTALL_PATH" != "$NEW_INSTALL_PATH" ]]; then
+    if [[ "$OLD_BIN_DIR" != "$NEW_INSTALL_PATH" ]]; then
         WARN "备份旧二进制文件: ${old_bin}.bak_old"
         mv "$old_bin" "${old_bin}.bak_old" || true
     fi
@@ -573,11 +575,11 @@ function update_install_config() {
     cat > "${NEW_CONFIG_PATH}/.install_config" << EOF
 # XrayR 安装配置信息 (迁移工具自动更新)
 XRAY_BIN_NAME="${NEW_BIN_NAME}"
-XRAY_INSTALL_PATH="${NEW_INSTALL_PATH}"
-XRAY_CONFIG_PATH="${NEW_CONFIG_PATH}"
+XRAYR_BIN_DIR="${NEW_INSTALL_PATH}"
+CONFIG_DIR="${NEW_CONFIG_PATH}"
 XRAY_PROCESS_NAME="${NEW_PROCESS_NAME}"
 XRAY_SERVICE_NAME="${NEW_SERVICE_NAME}"
-MIGRATE_FROM="${OLD_INSTALL_PATH}/${OLD_BIN_NAME}"
+MIGRATE_FROM="${OLD_BIN_DIR}/${OLD_BIN_NAME}"
 MIGRATE_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 EOF
     
@@ -620,7 +622,7 @@ function parse_arguments() {
                 shift 2
                 ;;
             --old-install-path)
-                OLD_INSTALL_PATH_OVERRIDE="$2"
+                OLD_BIN_DIR_OVERRIDE="$2"
                 shift 2
                 ;;
             --old-config-path)
@@ -648,8 +650,13 @@ function parse_arguments() {
                 shift 2
                 ;;
             -i|--to-install-path)
-                NEW_INSTALL_PATH="$2"
-                shift 2
+                if [[ -n "$2" && "$2" != -* ]]; then
+                    NEW_INSTALL_PATH="$2"
+                    shift 2
+                else
+                    ERROR "缺少新的安装路径参数值, 请使用 -i <path> 指定安装路径。"
+                    exit 1
+                fi
                 ;;
             -c|--to-config-path)
                 NEW_CONFIG_PATH="$2"

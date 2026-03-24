@@ -89,8 +89,8 @@ ps aux | grep nginx
 cat /etc/XrayR/.install_config
 # 输出示例：
 # XRAY_BIN_NAME="app-service"
-# XRAY_INSTALL_PATH="/opt/app"
-# XRAY_CONFIG_PATH="/etc/app"
+# XRAYR_BIN_DIR="/opt/app"
+# CONFIG_DIR="/etc/app"
 # XRAY_PROCESS_NAME="appworker"
 # XRAY_SERVICE_NAME="appservice"
 ```

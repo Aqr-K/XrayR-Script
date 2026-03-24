@@ -416,8 +416,8 @@ function save_install_config() {
 # XrayR 安装配置信息（由 install.sh 自动生成）
 # 用于迁移、升级等操作
 XRAY_BIN_NAME="${XRAY_BIN_NAME}"
-XRAY_INSTALL_PATH="${XRAYR_BIN_DIR}"
-XRAY_CONFIG_PATH="${CONFIG_DIR}"
+XRAYR_BIN_DIR="${XRAYR_BIN_DIR}"
+CONFIG_DIR="${CONFIG_DIR}"
 XRAY_PROCESS_NAME="${XRAY_PROCESS_NAME}"
 XRAY_SERVICE_NAME="${XRAY_SERVICE_NAME}"
 INSTALL_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -866,7 +866,7 @@ function setup_systemd_service() {
 		Type=simple
 		Restart=always
 		RestartSec=5s
-		ExecStart=/bin/sh -c 'source /etc/XrayR/.install_config && exec -a "\$XRAY_PROCESS_NAME" \$XRAYR_BIN_DIR/\$XRAY_BIN_NAME --config \$CONFIG_DIR/config.yml'
+		ExecStart=/bin/sh -c 'source ${CONFIG_DIR}/.install_config && exec -a "\$XRAY_PROCESS_NAME" \$XRAYR_BIN_DIR/\$XRAY_BIN_NAME --config \$CONFIG_DIR/config.yml'
 		WorkingDirectory=${XRAYR_BIN_DIR}/
 		[Install]
 		WantedBy=multi-user.target
@@ -892,7 +892,7 @@ function setup_openrc_service() {
     $priv_cmd tee "$service_path" >/dev/null <<-EOF
 		#!/sbin/openrc-run
 		command="/bin/sh"
-		command_args="-c 'source /etc/XrayR/.install_config && exec -a \"\\\$XRAY_PROCESS_NAME\" \\\$XRAYR_BIN_DIR/\\\$XRAY_BIN_NAME --config \\\$CONFIG_DIR/config.yml'"
+		command_args="-c 'source ${CONFIG_DIR}/.install_config && exec -a \"\\\$XRAY_PROCESS_NAME\" \\\$XRAYR_BIN_DIR/\\\$XRAY_BIN_NAME --config \\\$CONFIG_DIR/config.yml'"
 		command_background=true
 		directory="${XRAYR_BIN_DIR}"
 		pidfile="/run/\${RC_SVCNAME}.pid"
@@ -923,7 +923,7 @@ function setup_launchd_service() {
 		    <array>
 		        <string>/bin/sh</string>
 		        <string>-c</string>
-		        <string>source /etc/XrayR/.install_config && exec -a "\$XRAY_PROCESS_NAME" \$XRAYR_BIN_DIR/\$XRAY_BIN_NAME --config \$CONFIG_DIR/config.yml</string>
+		        <string>source ${CONFIG_DIR}/.install_config && exec -a "\$XRAY_PROCESS_NAME" \$XRAYR_BIN_DIR/\$XRAY_BIN_NAME --config \$CONFIG_DIR/config.yml</string>
 		    </array>
 		    <key>WorkingDirectory</key><string>${XRAYR_BIN_DIR}/</string>
 		    <key>RunAtLoad</key><true/>
@@ -952,7 +952,7 @@ function setup_rcd_service_freebsd() {
 		name="${XRAY_SERVICE_NAME}"
 		rcvar="${XRAY_SERVICE_NAME}_enable"
 		command="/bin/sh"
-		command_args="-c 'source /etc/XrayR/.install_config && exec -a \"\\\$XRAY_PROCESS_NAME\" \\\$XRAYR_BIN_DIR/\\\$XRAY_BIN_NAME --config \\\$CONFIG_DIR/config.yml &'"
+		command_args="-c 'source ${CONFIG_DIR}/.install_config && exec -a \"\\\$XRAY_PROCESS_NAME\" \\\$XRAYR_BIN_DIR/\\\$XRAY_BIN_NAME --config \\\$CONFIG_DIR/config.yml &'"
 		load_rc_config \$name
 		run_rc_command "\$1"
 	EOF
@@ -976,7 +976,7 @@ function setup_rcd_service_openbsd() {
     $priv_cmd tee "$rcd_path" >/dev/null <<-EOF
 		#!/bin/ksh
 		daemon="/bin/sh"
-		daemon_flags="-c 'source /etc/XrayR/.install_config && exec -a \"\\\$XRAY_PROCESS_NAME\" \\\$XRAYR_BIN_DIR/\\\$XRAY_BIN_NAME --config \\\$CONFIG_DIR/config.yml'"
+		daemon_flags="-c 'source ${CONFIG_DIR}/.install_config && exec -a \"\\\$XRAY_PROCESS_NAME\" \\\$XRAYR_BIN_DIR/\\\$XRAY_BIN_NAME --config \\\$CONFIG_DIR/config.yml'"
 		. /etc/rc.d/rc.subr
 		rc_cmd "\$1"
 	EOF
@@ -996,7 +996,7 @@ function setup_termux_service() {
     mkdir -p "$service_dir" "$service_dir/log"
     cat > "$service_dir/run" <<-EOF
 		#!/data/data/com.termux/files/usr/bin/sh
-		exec /bin/sh -c 'source /etc/XrayR/.install_config && exec -a "\$XRAY_PROCESS_NAME" \$XRAYR_BIN_DIR/\$XRAY_BIN_NAME --config \$CONFIG_DIR/config.yml'
+		exec /bin/sh -c 'source ${CONFIG_DIR}/.install_config && exec -a "\$XRAY_PROCESS_NAME" \$XRAYR_BIN_DIR/\$XRAY_BIN_NAME --config \$CONFIG_DIR/config.yml'
 	EOF
     chmod +x "$service_dir/run"
     cat > "$service_dir/log/run" <<-EOF

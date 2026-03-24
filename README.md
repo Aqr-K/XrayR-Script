@@ -42,6 +42,7 @@ curl -fsSL https://raw.githubusercontent.com/Aqr-K/XrayR-Script/main/install.sh 
 **可选参数：**
 - `-b, --bin-name NAME` - 自定义二进制文件名 (默认: XrayR)
 - `-p, --process-name NAME` - 自定义启动进程名 (默认: XrayR)
+- `-s, --service-name NAME` - 自定义 Service 名称 (默认: xrayr)
 - `-rp, --xrayr-install-path PATH` - 安装路径 (默认: /usr/local/XrayR)
 - `-cp, --config-install-path PATH` - 配置路径 (默认: /etc/XrayR)
 - `-rt, --xrayr-token TOKEN` - XrayR 仓库访问令牌
@@ -56,15 +57,25 @@ curl -fsSL https://raw.githubusercontent.com/Aqr-K/XrayR-Script/main/install.sh 
 
 ### migrate.sh 参数
 
-读取旧配置并迁移到新位置/名称
+迁移现有安装到新位置/名称。从 .install_config 或参数读取旧配置。
 
-**可选参数：**
-- `--config-file PATH` - 指定 .install_config 文件路径
-- `-b, --to-bin-name NAME` - 新二进制文件名
-- `-p, --to-process-name NAME` - 新进程名
-- `-i, --to-install-path PATH` - 新安装路径
-- `-c, --to-config-path PATH` - 新配置路径
-- `--confirm` - 显示确认对话 (默认直接执行)
+**可选参数（旧配置，可从 .install_config 自动读取）：**
+- `--config-file PATH` - 指定 .install_config 文件路径 (默认: /etc/XrayR/.install_config)
+- `--old-bin-name NAME` - 手动指定旧的二进制文件名
+- `--old-install-path PATH` - 手动指定旧的安装路径
+- `--old-config-path PATH` - 手动指定旧的配置路径
+- `--old-process-name NAME` - 手动指定旧的进程名
+- `--old-service-name NAME` - 手动指定旧的 Service 名称
+
+**新配置参数（指定新的隐蔽部署参数）：**
+- `-b, --to-bin-name NAME` - 新的二进制文件名
+- `-p, --to-process-name NAME` - 新的进程名
+- `-s, --to-service-name NAME` - 新的 Service 名称
+- `-i, --to-install-path PATH` - 新的安装路径
+- `-c, --to-config-path PATH` - 新的配置路径
+
+**其他参数：**
+- `--confirm` - 显示确认对话 (默认直接执行，无交互)
 - `-d, --debug` - 启用调试模式
 - `-h, --help` - 显示帮助信息
 
@@ -152,9 +163,10 @@ sudo bash migrate.sh \
 ```bash
 # /etc/XrayR/.install_config (或自定义配置路径)
 XRAY_BIN_NAME="custom-name"
-XRAY_INSTALL_PATH="/custom/path"
-XRAY_CONFIG_PATH="/custom/config"
+XRAYR_BIN_DIR="/custom/path"
+CONFIG_DIR="/custom/config"
 XRAY_PROCESS_NAME="custom-process"
+XRAY_SERVICE_NAME="custom-service"
 INSTALL_TIMESTAMP="2024-03-24T02:36:00Z"
 ```
 
