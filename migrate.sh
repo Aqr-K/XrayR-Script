@@ -1,0 +1,574 @@
+#!/bin/bash
+
+################################################################################
+#
+#  迁移工具 (migrate.sh)
+#
+#  功能: 将已安装的 Xra二进制 迁移到新位置、新名称、新进程名
+#  用处: 支持离线迁移二进制文件，更新 service 配置，更新进程名等
+#
+#  使用示例:
+#    ./xray-migrate.sh \
+#      --to-bin-name new-service \
+#      --to-process-name new-worker \
+#      --to-install-path /opt/newapp \
+#      --to-config-path /etc/newconfig
+#
+################################################################################
+
+#=================================================
+#              颜色和日志定义
+#=================================================
+Green="\033[32m"
+Red="\033[31m"
+Yellow='\033[33m'
+Blue='\033[34m'
+Font="\033[0m"
+
+INFO_PREFIX="[${Green}INFO${Font}]"
+ERROR_PREFIX="[${Red}ERROR${Font}]"
+WARN_PREFIX="[${Yellow}WARN${Font}]"
+
+function INFO() {
+    echo -e "${INFO_PREFIX} ${1}" >&2
+}
+function ERROR() {
+    echo -e "${ERROR_PREFIX} ${1}" >&2
+}
+function WARN() {
+    echo -e "${WARN_PREFIX} ${1}" >&2
+}
+
+#=================================================
+#              全局变量
+#=================================================
+
+# 源配置（从 .install_config 读取）
+OLD_BIN_NAME=""
+OLD_INSTALL_PATH=""
+OLD_CONFIG_PATH=""
+OLD_PROCESS_NAME=""
+OLD_SERVICE_NAME=""
+
+# 目标配置（用户指定或继承）
+NEW_BIN_NAME=""
+NEW_INSTALL_PATH=""
+NEW_CONFIG_PATH=""
+NEW_PROCESS_NAME=""
+NEW_SERVICE_NAME=""
+
+# 其他配置
+CONFIG_FILE=""
+SKIP_CONFIRM=1
+DEBUG_MODE=false
+
+#=================================================
+#              函数定义
+#=================================================
+
+function show_help() {
+    cat << 'EOF'
+XrayR 迁移工具
+
+用法: bash xray-migrate.sh [选项]
+
+迁移现有的 XrayR 安装到新位置、新名称、新进程名。
+
+必选项:
+  无 (会自动从 /etc/XrayR/.install_config 读取旧配置)
+
+可选项:
+  --config-file PATH          指定 .install_config 文件路径
+                              默认: /etc/XrayR/.install_config
+
+  -b, --to-bin-name NAME      迁移到新的二进制文件名
+  -p, --to-process-name NAME  迁移到新的进程名
+  -s, --to-service-name NAME  迁移到新的 Service 名称 (systemd/OpenRC/rc.d 等)
+  -i, --to-install-path PATH  迁移到新的安装路径
+  -c, --to-config-path PATH   迁移到新的配置路径
+
+  --confirm                   显示确认对话 (默认为全自动化无需确认)
+  -d, --debug                 启用调试模式
+  -h, --help                  显示此帮助信息
+
+示例:
+
+  # 立即改变进程名（其他参数保持不变）
+  bash xray-migrate.sh --to-process-name apache
+
+  # 迁移到新的安装路径和配置路径
+  bash xray-migrate.sh \
+    --to-install-path /opt/myapp \
+    --to-config-path /opt/config \
+    --to-bin-name myapp \
+    --to-process-name myworker
+
+  # 只改变二进制名称
+  bash xray-migrate.sh --to-bin-name cdn-service --skip-confirm
+
+EOF
+}
+
+# 获取绝对路径
+function get_absolute_path() {
+    local path="$1"
+    if [[ "$path" == /* ]]; then
+        echo "$path"
+    else
+        echo "$(cd "$(dirname "$path")" && pwd)/$(basename "$path")"
+    fi
+}
+
+# 读取旧配置
+function load_old_config() {
+    # 如果配置文件存在，读取它
+    if [[ -f "$CONFIG_FILE" ]]; then
+        INFO "读取旧配置: $CONFIG_FILE"
+        source "$CONFIG_FILE"
+        
+        # 从配置文件中提取变量（注意旧文件中可能使用 XRAY_INSTALL_PATH 键名）
+        OLD_BIN_NAME="${XRAY_BIN_NAME:-XrayR}"
+        OLD_INSTALL_PATH="${XRAY_INSTALL_PATH:-${OLD_INSTALL_PATH}}"
+        OLD_CONFIG_PATH="${XRAY_CONFIG_PATH:-${OLD_CONFIG_PATH}}"
+        OLD_PROCESS_NAME="${XRAY_PROCESS_NAME:-XrayR}"
+        OLD_SERVICE_NAME="${XRAY_SERVICE_NAME:-xrayr}"
+        
+        # 备用字段名兼容性
+        OLD_INSTALL_PATH="${OLD_INSTALL_PATH:-$(grep '^XRAYR_BIN_DIR=' "$CONFIG_FILE" | cut -d= -f2)}"
+    else
+        # 配置文件不存在时，使用默认值作为旧配置
+        WARN "配置文件不存在: $CONFIG_FILE"
+        INFO "使用默认安装配置..."
+        
+        OLD_BIN_NAME="XrayR"
+        OLD_INSTALL_PATH="/usr/local/XrayR"
+        OLD_CONFIG_PATH="/etc/XrayR"
+        OLD_PROCESS_NAME="XrayR"
+        OLD_SERVICE_NAME="xrayr"
+    fi
+    
+    # 验证二进制文件存在，如果不存在则尝试查找
+    if [[ ! -f "${OLD_INSTALL_PATH}/${OLD_BIN_NAME}" ]]; then
+        # 尝试在安装路径中查找任何 XrayR 相关的可执行文件
+        local found_bin
+        found_bin=$(find "$OLD_INSTALL_PATH" -maxdepth 1 -type f -executable -name "XrayR*" -o -name "*service*" 2>/dev/null | head -1)
+        
+        if [[ -n "$found_bin" ]]; then
+            OLD_BIN_NAME="$(basename "$found_bin")"
+            WARN "自动检测到二进制文件: $OLD_BIN_NAME"
+        else
+            # 如果仍然找不到，显示错误和帮助信息
+            ERROR "无法找到旧的二进制文件: ${OLD_INSTALL_PATH}/${OLD_BIN_NAME}"
+            ERROR "支持的操作："
+            ERROR "  1. 创建 $CONFIG_FILE 文件并指定正确的配置"
+            ERROR "  2. 使用以下命令手动指定旧配置："
+            ERROR "     sudo bash migrate.sh \\"
+            ERROR "       --old-bin-name <old-name> \\"
+            ERROR "       --old-install-path <old-path> \\"
+            ERROR "       --old-config-path <old-config-path> \\"
+            ERROR "       --to-bin-name <new-name>"
+            exit 1
+        fi
+    fi
+    
+    INFO "旧配置已加载:"
+    INFO "  二进制名: $OLD_BIN_NAME"
+    INFO "  安装路径: $OLD_INSTALL_PATH"
+    INFO "  配置路径: $OLD_CONFIG_PATH"
+    INFO "  进程名: $OLD_PROCESS_NAME"
+    INFO "  Service 名: $OLD_SERVICE_NAME"
+}
+
+# 验证旧二进制文件存在
+function verify_old_binary() {
+    local old_bin="${OLD_INSTALL_PATH}/${OLD_BIN_NAME}"
+    if [[ ! -f "$old_bin" ]]; then
+        ERROR "旧二进制文件不存在: $old_bin"
+        exit 1
+    fi
+    INFO "验证旧二进制文件: $old_bin ✓"
+}
+
+# 准备新配置（如果未指定则继承旧值）
+function prepare_new_config() {
+    NEW_BIN_NAME="${NEW_BIN_NAME:-$OLD_BIN_NAME}"
+    NEW_INSTALL_PATH="${NEW_INSTALL_PATH:-$OLD_INSTALL_PATH}"
+    NEW_CONFIG_PATH="${NEW_CONFIG_PATH:-$OLD_CONFIG_PATH}"
+    NEW_PROCESS_NAME="${NEW_PROCESS_NAME:-$OLD_PROCESS_NAME}"
+    NEW_SERVICE_NAME="${NEW_SERVICE_NAME:-$OLD_SERVICE_NAME}"
+    
+    # 规范化路径
+    NEW_INSTALL_PATH="$(get_absolute_path "$NEW_INSTALL_PATH")"
+    NEW_CONFIG_PATH="$(get_absolute_path "$NEW_CONFIG_PATH")"
+    
+    INFO "新配置已准备:"
+    INFO "  二进制名: $NEW_BIN_NAME"
+    INFO "  安装路径: $NEW_INSTALL_PATH"
+    INFO "  配置路径: $NEW_CONFIG_PATH"
+    INFO "  进程名: $NEW_PROCESS_NAME"
+    INFO "  Service 名: $NEW_SERVICE_NAME"
+}
+
+# 显示迁移摘要
+function show_migration_summary() {
+    echo ""
+    echo "═══════════════════════════════════════════════════════"
+    echo "                  XrayR 迁移摘要"
+    echo "═══════════════════════════════════════════════════════"
+    
+    if [[ "$OLD_BIN_NAME" != "$NEW_BIN_NAME" ]]; then
+        echo "二进制名: $OLD_BIN_NAME → $NEW_BIN_NAME"
+    else
+        echo "二进制名: $OLD_BIN_NAME (不变)"
+    fi
+    
+    if [[ "$OLD_INSTALL_PATH" != "$NEW_INSTALL_PATH" ]]; then
+        echo "安装路径: $OLD_INSTALL_PATH → $NEW_INSTALL_PATH"
+    else
+        echo "安装路径: $OLD_INSTALL_PATH (不变)"
+    fi
+    
+    if [[ "$OLD_CONFIG_PATH" != "$NEW_CONFIG_PATH" ]]; then
+        echo "配置路径: $OLD_CONFIG_PATH → $NEW_CONFIG_PATH"
+    else
+        echo "配置路径: $OLD_CONFIG_PATH (不变)"
+    fi
+    
+    if [[ "$OLD_PROCESS_NAME" != "$NEW_PROCESS_NAME" ]]; then
+        echo "进程名: $OLD_PROCESS_NAME → $NEW_PROCESS_NAME"
+    else
+        echo "进程名: $OLD_PROCESS_NAME (不变)"
+    fi
+    
+    if [[ "$OLD_SERVICE_NAME" != "$NEW_SERVICE_NAME" ]]; then
+        echo "Service 名: $OLD_SERVICE_NAME → $NEW_SERVICE_NAME"
+    else
+        echo "Service 名: $OLD_SERVICE_NAME (不变)"
+    fi
+    
+    echo "═══════════════════════════════════════════════════════"
+    echo ""
+    
+    if [[ $SKIP_CONFIRM -eq 0 ]]; then
+        read -p "请确认上述迁移参数是否正确 (y/n): " confirm
+        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+            INFO "迁移已取消。"
+            exit 0
+        fi
+    fi
+}
+
+# 清理旧的 Service 文件（如果 service 名称改变的话）
+function cleanup_old_service() {
+    # 如果 service 名称没有改变，则不需要清理
+    if [[ "$OLD_SERVICE_NAME" == "$NEW_SERVICE_NAME" ]]; then
+        return 0
+    fi
+    
+    INFO "清理旧的 Service 文件..."
+    
+    local priv_cmd=""
+    if [[ $EUID -ne 0 ]]; then
+        if command -v sudo &> /dev/null; then
+            priv_cmd="sudo"
+        fi
+    fi
+    
+    # systemd
+    if [[ -f "/etc/systemd/system/${OLD_SERVICE_NAME}.service" ]]; then
+        INFO "移除旧的 systemd service: /etc/systemd/system/${OLD_SERVICE_NAME}.service"
+        $priv_cmd rm -f "/etc/systemd/system/${OLD_SERVICE_NAME}.service"
+        $priv_cmd systemctl daemon-reload || true
+    fi
+    
+    # OpenRC
+    if [[ -f "/etc/init.d/${OLD_SERVICE_NAME}" ]]; then
+        INFO "移除旧的 OpenRC service: /etc/init.d/${OLD_SERVICE_NAME}"
+        $priv_cmd rm -f "/etc/init.d/${OLD_SERVICE_NAME}"
+    fi
+    
+    # macOS launchd
+    if [[ -f "/Library/LaunchDaemons/com.${OLD_SERVICE_NAME}.plist" ]]; then
+        INFO "移除旧的 launchd service: /Library/LaunchDaemons/com.${OLD_SERVICE_NAME}.plist"
+        $priv_cmd launchctl unload "/Library/LaunchDaemons/com.${OLD_SERVICE_NAME}.plist" 2>/dev/null || true
+        $priv_cmd rm -f "/Library/LaunchDaemons/com.${OLD_SERVICE_NAME}.plist"
+    fi
+    
+    # FreeBSD rc.d
+    if [[ -f "/usr/local/etc/rc.d/${OLD_SERVICE_NAME}" ]]; then
+        INFO "移除旧的 FreeBSD rc.d service: /usr/local/etc/rc.d/${OLD_SERVICE_NAME}"
+        $priv_cmd rm -f "/usr/local/etc/rc.d/${OLD_SERVICE_NAME}"
+    fi
+    
+    # OpenBSD rc.d
+    if [[ -f "/etc/rc.d/${OLD_SERVICE_NAME}" ]]; then
+        INFO "移除旧的 OpenBSD rc.d service: /etc/rc.d/${OLD_SERVICE_NAME}"
+        $priv_cmd rm -f "/etc/rc.d/${OLD_SERVICE_NAME}"
+    fi
+    
+    # Termux
+    if [[ -d "$HOME/.termux/service/${OLD_SERVICE_NAME}" ]]; then
+        INFO "移除旧的 Termux service: $HOME/.termux/service/${OLD_SERVICE_NAME}"
+        rm -rf "$HOME/.termux/service/${OLD_SERVICE_NAME}"
+    fi
+}
+
+# 停止服务
+function stop_service() {
+    INFO "正在停止 XrayR 服务..."
+    
+    local priv_cmd=""
+    if [[ $EUID -ne 0 ]]; then
+        if command -v sudo &> /dev/null; then
+            priv_cmd="sudo"
+        fi
+    fi
+    
+    # 停止旧 service
+    if command -v systemctl &> /dev/null; then
+        $priv_cmd systemctl stop ${OLD_SERVICE_NAME} || WARN "systemctl stop 失败，继续..."
+    elif command -v rc-service &> /dev/null; then
+        $priv_cmd rc-service ${OLD_SERVICE_NAME} stop || WARN "rc-service stop 失败，继续..."
+    fi
+}
+
+# 迁移二进制文件
+function migrate_binary() {
+    local old_bin="${OLD_INSTALL_PATH}/${OLD_BIN_NAME}"
+    local new_bin="${NEW_INSTALL_PATH}/${NEW_BIN_NAME}"
+    
+    # 如果路径和名称都没变，则跳过
+    if [[ "$old_bin" == "$new_bin" ]]; then
+        INFO "二进制文件位置未变，跳过迁移。"
+        return 0
+    fi
+    
+    INFO "迁移二进制文件..."
+    
+    # 创建新目录
+    mkdir -p "$NEW_INSTALL_PATH" || {
+        ERROR "无法创建目录: $NEW_INSTALL_PATH"
+        exit 1
+    }
+    
+    # 备份新位置的旧文件（如果存在）
+    if [[ -f "$new_bin" ]]; then
+        WARN "目标文件已存在，备份为 ${new_bin}.bak"
+        mv "$new_bin" "${new_bin}.bak"
+    fi
+    
+    # 复制（而非移动，保留源文件作为备份）
+    cp "$old_bin" "$new_bin" || {
+        ERROR "无法复制二进制文件。"
+        exit 1
+    }
+    chmod +x "$new_bin"
+    
+    # 可选：删除或保留旧文件
+    if [[ "$OLD_INSTALL_PATH" != "$NEW_INSTALL_PATH" ]]; then
+        WARN "备份旧二进制文件: ${old_bin}.bak_old"
+        mv "$old_bin" "${old_bin}.bak_old" || true
+    fi
+    
+    INFO "二进制文件已迁移: $new_bin"
+}
+
+# 迁移配置文件（可选）
+function migrate_config() {
+    if [[ "$OLD_CONFIG_PATH" == "$NEW_CONFIG_PATH" ]]; then
+        INFO "配置路径未变，跳过迁移。"
+        return 0
+    fi
+    
+    INFO "迁移配置文件..."
+    
+    if [[ -d "$OLD_CONFIG_PATH" ]]; then
+        mkdir -p "$NEW_CONFIG_PATH"
+        # 复制所有文件（除了 .install_config）
+        cp -r "$OLD_CONFIG_PATH"/* "$NEW_CONFIG_PATH/" 2>/dev/null || true
+        INFO "配置文件已迁移到: $NEW_CONFIG_PATH"
+    fi
+}
+
+# 注意: Service 文件配置已改为动态加载 .install_config
+# 无需在此更新 service 文件，只需更新 .install_config 即可
+# Service 启动时会自动读取最新配置
+
+# 检测 Service 文件是否为硬编码版本
+function detect_service_version() {
+    local service_file="$1"
+    
+    if [[ ! -f "$service_file" ]]; then
+        echo "missing"
+        return 0
+    fi
+    
+    # 检查文件中是否包含 "source.*\.install_config"
+    if grep -q "source.*\.install_config" "$service_file"; then
+        echo "dynamic"    # 新的动态版本
+    else
+        echo "hardcoded"  # 旧的硬编码版本
+    fi
+}
+
+# 更新配置文件
+function update_install_config() {
+    INFO "更新 .install_config..."
+    
+    mkdir -p "$NEW_CONFIG_PATH"
+    
+    cat > "${NEW_CONFIG_PATH}/.install_config" << EOF
+# XrayR 安装配置信息 (迁移工具自动更新)
+XRAY_BIN_NAME="${NEW_BIN_NAME}"
+XRAY_INSTALL_PATH="${NEW_INSTALL_PATH}"
+XRAY_CONFIG_PATH="${NEW_CONFIG_PATH}"
+XRAY_PROCESS_NAME="${NEW_PROCESS_NAME}"
+XRAY_SERVICE_NAME="${NEW_SERVICE_NAME}"
+MIGRATE_FROM="${OLD_INSTALL_PATH}/${OLD_BIN_NAME}"
+MIGRATE_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+EOF
+    
+    chmod 600 "${NEW_CONFIG_PATH}/.install_config"
+    INFO "配置文件已保存: ${NEW_CONFIG_PATH}/.install_config"
+}
+
+# 启动服务
+function start_service() {
+    INFO "启动 XrayR 服务..."
+    
+    local priv_cmd=""
+    if [[ $EUID -ne 0 ]]; then
+        if command -v sudo &> /dev/null; then
+            priv_cmd="sudo"
+        fi
+    fi
+    
+    # 启动新 service（使用新的 service 名称）
+    if command -v systemctl &> /dev/null; then
+        $priv_cmd systemctl restart ${NEW_SERVICE_NAME}
+    elif command -v rc-service &> /dev/null; then
+        $priv_cmd rc-service ${NEW_SERVICE_NAME} restart
+    fi
+    
+    sleep 2
+    INFO "服务启动完成。"
+}
+
+# 解析参数
+function parse_arguments() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --config-file)
+                CONFIG_FILE="$2"
+                shift 2
+                ;;
+            -b|--to-bin-name)
+                NEW_BIN_NAME="$2"
+                shift 2
+                ;;
+            -p|--to-process-name)
+                NEW_PROCESS_NAME="$2"
+                shift 2
+                ;;
+            -s|--to-service-name)
+                NEW_SERVICE_NAME="$2"
+                shift 2
+                ;;
+            -i|--to-install-path)
+                NEW_INSTALL_PATH="$2"
+                shift 2
+                ;;
+            -c|--to-config-path)
+                NEW_CONFIG_PATH="$2"
+                shift 2
+                ;;
+            --confirm)
+                SKIP_CONFIRM=0
+                shift
+                ;;
+            -d|--debug)
+                DEBUG_MODE=true
+                shift
+                ;;
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            *)
+                ERROR "未知选项: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+}
+
+#=================================================
+#              主函数
+#=================================================
+
+function main() {
+    # 默认配置文件路径
+    CONFIG_FILE="${CONFIG_FILE:-/etc/XrayR/.install_config}"
+    
+    # 解析参数
+    parse_arguments "$@"
+    
+    # 检查权限
+    if [[ $EUID -ne 0 ]]; then
+        if ! command -v sudo &> /dev/null && ! command -v doas &> /dev/null; then
+            ERROR "需要 root 权限或 sudo/doas。"
+            exit 1
+        fi
+    fi
+    
+    INFO "XrayR 迁移工具开始执行..."
+    echo ""
+    
+    # 加载旧配置
+    load_old_config
+    
+    # 验证旧二进制
+    verify_old_binary
+    
+    # 准备新配置
+    prepare_new_config
+    
+    # 显示摘要
+    show_migration_summary
+    
+    # 检测旧 Service 文件版本（硬编码 vs 动态）
+    if command -v systemctl &> /dev/null; then
+        local old_service_file="/etc/systemd/system/${OLD_SERVICE_NAME}.service"
+        if [[ -f "$old_service_file" ]]; then
+            if ! grep -q "source.*\.install_config" "$old_service_file"; then
+                WARN "检测到硬编码版本的 Service 文件"
+                WARN "此 Service 文件仍使用旧的硬编码方式，需要重新生成为动态版本"
+                WARN ""
+                WARN "请运行以下命令完成升级："
+                WARN "  sudo bash install.sh -s ${NEW_SERVICE_NAME}"
+                WARN ""
+                WARN "或手动删除旧 Service 文件，由 systemd 重新启动时自动生成。"
+                exit 1
+            fi
+        fi
+    fi
+    
+    # 执行迁移
+    stop_service
+    cleanup_old_service
+    migrate_binary
+    migrate_config
+    update_install_config
+    start_service
+    
+    echo ""
+    INFO "迁移完成！"
+    INFO "新配置信息："
+    INFO "  二进制位置: ${NEW_INSTALL_PATH}/${NEW_BIN_NAME}"
+    INFO "  配置位置: ${NEW_CONFIG_PATH}"
+    INFO "  进程名: ${NEW_PROCESS_NAME}"
+    echo ""
+}
+
+main "$@"

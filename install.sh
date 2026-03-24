@@ -67,6 +67,17 @@ CONFIG_REPO_URL=""
 CONFIG_TOKEN=""
 # XrayR 配置文件路径
 CONFIG_DIR="/etc/XrayR"
+
+#================
+# 自定义部署参数 (用于隐蔽部署)
+#================
+# 自定义二进制文件名
+XRAY_BIN_NAME="XrayR"
+# 自定义启动进程名 (用 exec -a 伪装)
+XRAY_PROCESS_NAME="XrayR"
+# 自定义 Service 名称 (systemd: service-name.service, OpenRC: /etc/init.d/service-name, etc)
+XRAY_SERVICE_NAME="xrayr"
+
 # 忽略更新的配置文件列表
 CONFIG_IGNORE_FILES=()
 # 仅更新指定的配置文件列表
@@ -104,6 +115,11 @@ function print_usage() {
     echo "  -rt; --xrayr-token          可选, XrayR GitHub 仓库访问令牌，用于访问私有仓库或增加 API 限额（不会回显）"
     echo "  -rv; --xrayr-version        可选, 指定要安装的版本，默认: ${XRAYR_RELEASE_TAG}，可选值: latest 或具体版本号 (例如: v0.10.0 或 0.10.0)"
     echo "  -rp; --xrayr-install-path   可选; 安装路径, 默认: ${XRAYR_BIN_DIR:-未设置}"
+    echo ""
+    echo "  custom:"
+    echo "  -b; --bin-name              可选, 自定义二进制文件名 (用于隐蔽部署), 默认: ${XRAY_BIN_NAME}"
+    echo "  -p; --process-name          可选, 自定义启动进程名 (用 exec -a 伪装), 默认: ${XRAY_PROCESS_NAME}"
+    echo "  -s; --service-name          可选, 自定义 Service 名称 (systemd/OpenRC/rc.d 等), 默认: ${XRAY_SERVICE_NAME}"
     echo ""
     echo " config:"
     echo "  -cr; --config-repo          可选, 配置文件仓库地址 (例如: https://github.com/owner/repo 或 git@github.com:owner/repo.git), 默认不使用外部配置仓库"
@@ -212,7 +228,7 @@ function download_file() {
         rm -f "$out" # 清理空文件
         exit 1
     fi
-    DEBUG "文件下载成功: $out"
+    DEBUG "文件下载成功: $out" 
 }
 
 # 检查操作系统和架构
@@ -384,6 +400,40 @@ function set_xrayr_asset_name() {
     fi
 }
 
+# 保存安装配置到文件
+# 功能:
+#   1. 创建配置目录（如果不存在）。
+#   2. 将安装参数保存到 .install_config 文件。
+#   3. 用于后续迁移、升级等操作时恢复安装参数。
+# 输出:
+#   - 在 $CONFIG_DIR 中创建 .install_config 文件（权限 600）
+function save_install_config() {
+    # 创建配置目录（如果不存在）
+    mkdir -p "$CONFIG_DIR"
+    
+    # 保存配置参数到 .install_config 文件
+    cat > "${CONFIG_DIR}/.install_config" << EOF
+# XrayR 安装配置信息（由 install.sh 自动生成）
+# 用于迁移、升级等操作
+XRAY_BIN_NAME="${XRAY_BIN_NAME}"
+XRAY_INSTALL_PATH="${XRAYR_BIN_DIR}"
+XRAY_CONFIG_PATH="${CONFIG_DIR}"
+XRAY_PROCESS_NAME="${XRAY_PROCESS_NAME}"
+XRAY_SERVICE_NAME="${XRAY_SERVICE_NAME}"
+INSTALL_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+INSTALL_USER="${USER}"
+INSTALL_HOSTNAME="$(hostname)"
+EOF
+
+    # 设置文件权限（只有所有者可读写）
+    chmod 600 "${CONFIG_DIR}/.install_config"
+    INFO "安装配置已保存到: ${CONFIG_DIR}/.install_config"
+    DEBUG "配置内容:"
+    if [[ "$DEBUG_MODE" == "true" ]]; then
+        cat "${CONFIG_DIR}/.install_config" >&2
+    fi
+}
+
 # 安装基础依赖 
 # 跨平台自动安装
 # 功能:
@@ -394,7 +444,7 @@ function install_dependencies() {
     INFO "正在检查并安装基础依赖..."
 
     # 定义所有必需的依赖项
-    local required_deps=(curl unzip tar socat jq)
+    local required_deps=(curl unzip socat jq)
     # 根据不同系统，cron 的包名可能不同
     if [[ "$OS_NAME" == "linux" ]]; then
         # 在 CentOS/RHEL 上，包名是 crontabs
@@ -710,6 +760,31 @@ function download_and_extract_xrayr() {
     mv "$tmp_dir"/XrayR* "$XRAYR_BIN_DIR/"
     chmod +x "$XRAYR_BIN_DIR/XrayR"*
     
+    # 如果使用了自定义的二进制文件名，则重命名
+    if [[ "$XRAY_BIN_NAME" != "XrayR" ]]; then
+        # 查找所有 XrayR* 文件并重命名为自定义名称
+        # 这样可以兼容 XrayR.exe 等不同平台的可执行文件
+        local xrayr_bin
+        for xrayr_bin in "$XRAYR_BIN_DIR"/XrayR*; do
+            if [[ -f "$xrayr_bin" ]]; then
+                # 获取文件扩展名（如果有的话）
+                local bin_ext="${xrayr_bin##*XrayR}"
+                local new_bin="${XRAYR_BIN_DIR}/${XRAY_BIN_NAME}${bin_ext}"
+                
+                # 如果目标文件已存在，备份旧的
+                if [[ -f "$new_bin" ]]; then
+                    INFO "备份旧的 $XRAY_BIN_NAME..."
+                    mv "$new_bin" "${new_bin}.bak"
+                fi
+                
+                # 重命名为自定义名称
+                mv "$xrayr_bin" "$new_bin"
+                chmod +x "$new_bin"
+                INFO "二进制文件已重命名为: $(basename "$new_bin")"
+            fi
+        done
+    fi
+    
     # 执行 manage_config_files 函数来处理配置文件
     manage_config_files "$tmp_dir"
 
@@ -773,7 +848,7 @@ function setup_service() {
 # Linux - systemd 实现
 function setup_systemd_service() {
     INFO "检测到 systemd, 正在创建 service 文件..."
-    local service_path="/etc/systemd/system/XrayR.service"
+    local service_path="/etc/systemd/system/${XRAY_SERVICE_NAME}.service"
     local priv_cmd=""
     if [[ $EUID -ne 0 ]]; then
         if command -v sudo &> /dev/null; then
@@ -791,21 +866,21 @@ function setup_systemd_service() {
 		Type=simple
 		Restart=always
 		RestartSec=5s
-		ExecStart=${XRAYR_BIN_DIR}/XrayR --config ${CONFIG_DIR}/config.yml
+		ExecStart=/bin/sh -c 'source /etc/XrayR/.install_config && exec -a "\$XRAY_PROCESS_NAME" \$XRAYR_BIN_DIR/\$XRAY_BIN_NAME --config \$CONFIG_DIR/config.yml'
 		WorkingDirectory=${XRAYR_BIN_DIR}/
 		[Install]
 		WantedBy=multi-user.target
 	EOF
-    $priv_cmd chmod 644 "$service_path"
+    $priv_cmd chmod 644 "$service_path" 
+    $priv_cmd systemctl enable ${XRAY_SERVICE_NAME}
     $priv_cmd systemctl daemon-reload
-	$priv_cmd systemctl enable XrayR
     INFO "systemd 服务设置完成。"
 }
 
 # Linux (Alpine) - OpenRC 实现
 function setup_openrc_service() {
     INFO "检测到 OpenRC, 正在创建 init 脚本..."
-    local service_path="/etc/init.d/xrayr"
+    local service_path="/etc/init.d/${XRAY_SERVICE_NAME}"
     local priv_cmd=""
     if [[ $EUID -ne 0 ]]; then
         if command -v sudo &> /dev/null; then
@@ -816,22 +891,22 @@ function setup_openrc_service() {
     fi
     $priv_cmd tee "$service_path" >/dev/null <<-EOF
 		#!/sbin/openrc-run
-		command="${XRAYR_BIN_DIR}/XrayR"
-		command_args="--config ${CONFIG_DIR}/config.yml"
+		command="/bin/sh"
+		command_args="-c 'source /etc/XrayR/.install_config && exec -a \"\\\$XRAY_PROCESS_NAME\" \\\$XRAYR_BIN_DIR/\\\$XRAY_BIN_NAME --config \\\$CONFIG_DIR/config.yml'"
 		command_background=true
 		directory="${XRAYR_BIN_DIR}"
 		pidfile="/run/\${RC_SVCNAME}.pid"
 		depend() { need net; after firewall; }
 	EOF
     $priv_cmd chmod +x "$service_path"
-    $priv_cmd rc-update add xrayr default
+    $priv_cmd rc-update add ${XRAY_SERVICE_NAME} default
     INFO "OpenRC 服务设置完成。"
 }
 
 # macOS - launchd 实现
 function setup_launchd_service() {
     INFO "检测到 macOS, 正在创建 launchd plist 文件..."
-    local plist_path="/Library/LaunchDaemons/com.xrayr.plist"
+    local plist_path="/Library/LaunchDaemons/com.${XRAY_SERVICE_NAME}.plist"
     local priv_cmd=""
     if [[ $EUID -ne 0 ]]; then
         if command -v sudo &> /dev/null; then
@@ -843,12 +918,12 @@ function setup_launchd_service() {
 		<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 		<plist version="1.0">
 		<dict>
-		    <key>Label</key><string>com.xrayr</string>
+		    <key>Label</key><string>com.${XRAY_SERVICE_NAME}</string>
 		    <key>ProgramArguments</key>
 		    <array>
-		        <string>${XRAYR_BIN_DIR}/XrayR</string>
-		        <string>--config</string>
-		        <string>${CONFIG_DIR}/config.yml</string>
+		        <string>/bin/sh</string>
+		        <string>-c</string>
+		        <string>source /etc/XrayR/.install_config && exec -a "\$XRAY_PROCESS_NAME" \$XRAYR_BIN_DIR/\$XRAY_BIN_NAME --config \$CONFIG_DIR/config.yml</string>
 		    </array>
 		    <key>WorkingDirectory</key><string>${XRAYR_BIN_DIR}/</string>
 		    <key>RunAtLoad</key><true/>
@@ -864,7 +939,7 @@ function setup_launchd_service() {
 # FreeBSD/DragonFly - rc.d 实现
 function setup_rcd_service_freebsd() {
     INFO "检测到 FreeBSD/DragonFly BSD, 正在创建 rc.d 脚本..."
-    local rcd_path="/usr/local/etc/rc.d/xrayr"
+    local rcd_path="/usr/local/etc/rc.d/${XRAY_SERVICE_NAME}"
     local priv_cmd=""
     if [[ $EUID -ne 0 ]]; then
         if command -v sudo &> /dev/null; then
@@ -874,22 +949,22 @@ function setup_rcd_service_freebsd() {
     $priv_cmd tee "$rcd_path" >/dev/null <<-EOF
 		#!/bin/sh
 		. /etc/rc.subr
-		name="xrayr"
-		rcvar="xrayr_enable"
-		command="${XRAYR_BIN_DIR}/XrayR"
-		command_args="--config ${CONFIG_DIR}/config.yml &"
+		name="${XRAY_SERVICE_NAME}"
+		rcvar="${XRAY_SERVICE_NAME}_enable"
+		command="/bin/sh"
+		command_args="-c 'source /etc/XrayR/.install_config && exec -a \"\\\$XRAY_PROCESS_NAME\" \\\$XRAYR_BIN_DIR/\\\$XRAY_BIN_NAME --config \\\$CONFIG_DIR/config.yml &'"
 		load_rc_config \$name
 		run_rc_command "\$1"
 	EOF
     $priv_cmd chmod +x "$rcd_path"
-    $priv_cmd sysrc xrayr_enable=YES
+    $priv_cmd sysrc ${XRAY_SERVICE_NAME}_enable=YES
     INFO "FreeBSD/DragonFly BSD rc.d 服务设置完成。"
 }
 
 # OpenBSD - rc.d 实现
 function setup_rcd_service_openbsd() {
     INFO "检测到 OpenBSD，正在创建 rc.d 脚本..."
-    local rcd_path="/etc/rc.d/xrayr"
+    local rcd_path="/etc/rc.d/${XRAY_SERVICE_NAME}"
     local priv_cmd=""
     if [[ $EUID -ne 0 ]]; then
         if command -v doas &> /dev/null; then
@@ -900,13 +975,13 @@ function setup_rcd_service_openbsd() {
     fi
     $priv_cmd tee "$rcd_path" >/dev/null <<-EOF
 		#!/bin/ksh
-		daemon="${XRAYR_BIN_DIR}/XrayR"
-		daemon_flags="--config ${CONFIG_DIR}/config.yml"
+		daemon="/bin/sh"
+		daemon_flags="-c 'source /etc/XrayR/.install_config && exec -a \"\\\$XRAY_PROCESS_NAME\" \\\$XRAYR_BIN_DIR/\\\$XRAY_BIN_NAME --config \\\$CONFIG_DIR/config.yml'"
 		. /etc/rc.d/rc.subr
 		rc_cmd "\$1"
 	EOF
     $priv_cmd chmod +x "$rcd_path"
-    $priv_cmd rcctl enable xrayr
+    $priv_cmd rcctl enable ${XRAY_SERVICE_NAME}
     INFO "OpenBSD rc.d 服务设置完成。"
 }
 
@@ -917,11 +992,11 @@ function setup_termux_service() {
         WARN "依赖 'termux-services' 未安装，无法设置服务。"
         return 1
     fi
-    local service_dir="$HOME/.termux/service/xrayr"
+    local service_dir="$HOME/.termux/service/${XRAY_SERVICE_NAME}"
     mkdir -p "$service_dir" "$service_dir/log"
     cat > "$service_dir/run" <<-EOF
 		#!/data/data/com.termux/files/usr/bin/sh
-		exec ${XRAYR_BIN_DIR}/XrayR --config ${CONFIG_DIR}/config.yml
+		exec /bin/sh -c 'source /etc/XrayR/.install_config && exec -a "\$XRAY_PROCESS_NAME" \$XRAYR_BIN_DIR/\$XRAY_BIN_NAME --config \$CONFIG_DIR/config.yml'
 	EOF
     chmod +x "$service_dir/run"
     cat > "$service_dir/log/run" <<-EOF
@@ -929,7 +1004,7 @@ function setup_termux_service() {
 		exec svlogd -tt ./main
 	EOF
     chmod +x "$service_dir/log/run"
-    sv-enable xrayr
+    sv-enable ${XRAY_SERVICE_NAME}
     INFO "Termux 服务设置完成。"
     WARN "请务必运行 'termux-wake-lock' 以防止 Termux 在后台被系统杀死。"
 }
@@ -953,24 +1028,24 @@ function start_service() {
     case "$OS_NAME" in
         linux)
             if command -v systemctl &> /dev/null; then
-                $priv_cmd systemctl restart XrayR
+                $priv_cmd systemctl restart ${XRAY_SERVICE_NAME}
             elif command -v rc-service &> /dev/null; then
-                $priv_cmd rc-service xrayr restart
+                $priv_cmd rc-service ${XRAY_SERVICE_NAME} restart
             fi
             ;;
         macos)
-            $priv_cmd launchctl unload /Library/LaunchDaemons/com.xrayr.plist 2>/dev/null || true
-            $priv_cmd launchctl load /Library/LaunchDaemons/com.xrayr.plist
+            $priv_cmd launchctl unload /Library/LaunchDaemons/com.${XRAY_SERVICE_NAME}.plist 2>/dev/null || true
+            $priv_cmd launchctl load /Library/LaunchDaemons/com.${XRAY_SERVICE_NAME}.plist
             ;;
         freebsd|dragonfly)
-            $priv_cmd service xrayr restart
+            $priv_cmd service ${XRAY_SERVICE_NAME} restart
             ;;
         openbsd)
-            $priv_cmd rcctl restart xrayr
+            $priv_cmd rcctl restart ${XRAY_SERVICE_NAME}
             ;;
         android)
-            sv-enable xrayr
-            sv restart xrayr
+            sv-enable ${XRAY_SERVICE_NAME}
+            sv restart ${XRAY_SERVICE_NAME}
             ;;
         *)
             WARN "无法在此操作系统 (${OS_NAME}) 上自动启动服务。"
@@ -1303,6 +1378,8 @@ function install_all() {
     set_xrayr_install_path
     set_xrayr_asset_name 
     set_config_install_path
+    # 保存安装配置（新增）
+    save_install_config
     # 下载并解压安装 XrayR
     download_and_extract_xrayr
     # 下载 geoip 与 geosite
@@ -1479,6 +1556,43 @@ function main() {
                     shift
                 else
                     ERROR "缺少 XrayR 安装路径参数值, 请使用 -rp <path> 指定安装路径。"
+                    print_usage
+                    exit 1
+                fi
+                ;;
+
+            #=================================================
+            # 自定义部署参数 (用于隐蔽部署)
+            #=================================================
+            # 自定义二进制文件名
+            -b|--bin-name)
+                if [[ -n "$2" && "$2" != -* ]]; then
+                    XRAY_BIN_NAME="$2"
+                    shift
+                else
+                    ERROR "缺少二进制文件名参数值, 请使用 -b <name> 指定文件名。"
+                    print_usage
+                    exit 1
+                fi
+                ;;
+            # 自定义启动进程名
+            -p|--process-name)
+                if [[ -n "$2" && "$2" != -* ]]; then
+                    XRAY_PROCESS_NAME="$2"
+                    shift
+                else
+                    ERROR "缺少启动进程名参数值, 请使用 -p <name> 指定进程名。"
+                    print_usage
+                    exit 1
+                fi
+                ;;
+            # 自定义 Service 名称
+            -s|--service-name)
+                if [[ -n "$2" && "$2" != -* ]]; then
+                    XRAY_SERVICE_NAME="$2"
+                    shift
+                else
+                    ERROR "缺少 Service 名称参数值, 请使用 -s <name> 指定 Service 名称。"
                     print_usage
                     exit 1
                 fi
