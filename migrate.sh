@@ -61,7 +61,6 @@ NEW_SERVICE_NAME=""
 CONFIG_FILE=""
 SKIP_CONFIRM=1
 DEBUG_MODE=false
-INTERACTIVE_MODE=0
 
 # 旧配置参数覆盖（用于命令行指定）
 OLD_BIN_NAME_OVERRIDE=""
@@ -86,8 +85,6 @@ XrayR 迁移工具
   无 (会自动从 /etc/XrayR/.install_config 读取旧配置)
 
 可选项:
-  -I, --interactive           启用交互模式，手动输入旧配置参数
-  
   --config-file PATH          指定 .install_config 文件路径
                               默认: /etc/XrayR/.install_config
 
@@ -109,8 +106,8 @@ XrayR 迁移工具
 
 示例:
 
-  # 交互式输入旧配置，快速补全 .install_config
-  bash migrate.sh -I
+  # 全自动：使用默认旧配置，无参数
+  bash migrate.sh
 
   # 立即改变进程名（其他参数保持不变）
   bash migrate.sh --to-process-name apache
@@ -122,12 +119,11 @@ XrayR 迁移工具
     --to-bin-name myapp \
     --to-process-name myworker
 
-  # 手动指定旧配置，然后迁移
+  # 指定非标准旧配置，自动补全 .install_config
   bash migrate.sh \
-    --old-bin-name old-service \
-    --old-install-path /opt/old \
-    --to-bin-name new-service \
-    --to-install-path /opt/new
+    --old-bin-name custom-bin \
+    --old-install-path /opt/custom \
+    --to-bin-name new-bin
 
 EOF
 }
@@ -142,47 +138,9 @@ function get_absolute_path() {
     fi
 }
 
-# 交互式输入旧配置
-function interactive_old_config() {
-    echo ""
-    echo "═══════════════════════════════════════════════════════"
-    echo "                 请输入旧配置信息"
-    echo "═══════════════════════════════════════════════════════"
-    echo ""
-    
-    read -p "旧的二进制文件名 [XrayR]: " input
-    OLD_BIN_NAME="${input:-XrayR}"
-    
-    read -p "旧的安装路径 [/usr/local/XrayR]: " input
-    OLD_INSTALL_PATH="${input:-/usr/local/XrayR}"
-    
-    read -p "旧的配置路径 [/etc/XrayR]: " input
-    OLD_CONFIG_PATH="${input:-/etc/XrayR}"
-    
-    read -p "旧的进程名 [XrayR]: " input
-    OLD_PROCESS_NAME="${input:-XrayR}"
-    
-    read -p "旧的Service名称 [xrayr]: " input
-    OLD_SERVICE_NAME="${input:-xrayr}"
-    
-    echo ""
-    INFO "旧配置已输入:"
-    INFO "  二进制名: $OLD_BIN_NAME"
-    INFO "  安装路径: $OLD_INSTALL_PATH"
-    INFO "  配置路径: $OLD_CONFIG_PATH"
-    INFO "  进程名: $OLD_PROCESS_NAME"
-    INFO "  Service 名: $OLD_SERVICE_NAME"
-}
-
 # 读取旧配置
 function load_old_config() {
-    # 如果是交互模式，则直接通过交互式输入
-    if [[ $INTERACTIVE_MODE -eq 1 ]]; then
-        interactive_old_config
-        return 0
-    fi
-    
-    # 否则，尝试从配置文件或默认值读取
+    # 尝试从配置文件或默认值读取
     if [[ -f "$CONFIG_FILE" ]]; then
         INFO "读取旧配置: $CONFIG_FILE"
         source "$CONFIG_FILE"
@@ -208,7 +166,7 @@ function load_old_config() {
         OLD_SERVICE_NAME="xrayr"
     fi
     
-    # 允许通过参数覆盖（即使没有交互模式）
+    # 允许通过参数覆盖（命令行参数优先级最高）
     OLD_BIN_NAME="${OLD_BIN_NAME_OVERRIDE:-$OLD_BIN_NAME}"
     OLD_INSTALL_PATH="${OLD_INSTALL_PATH_OVERRIDE:-$OLD_INSTALL_PATH}"
     OLD_CONFIG_PATH="${OLD_CONFIG_PATH_OVERRIDE:-$OLD_CONFIG_PATH}"
@@ -229,9 +187,7 @@ function load_old_config() {
             ERROR "无法找到旧的二进制文件: ${OLD_INSTALL_PATH}/${OLD_BIN_NAME}"
             ERROR "支持的操作："
             ERROR "  1. 创建 $CONFIG_FILE 文件并指定正确的配置"
-            ERROR "  2. 使用交互模式快速补全配置："
-            ERROR "     sudo bash migrate.sh -I"
-            ERROR "  3. 使用以下命令手动指定旧配置："
+            ERROR "  2. 使用命令行参数手动指定旧配置："
             ERROR "     sudo bash migrate.sh \\"
             ERROR "       --old-bin-name <old-name> \\"
             ERROR "       --old-install-path <old-path> \\"
@@ -528,10 +484,6 @@ function start_service() {
 function parse_arguments() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -I|--interactive)
-                INTERACTIVE_MODE=1
-                shift
-                ;;
             --config-file)
                 CONFIG_FILE="$2"
                 shift 2
