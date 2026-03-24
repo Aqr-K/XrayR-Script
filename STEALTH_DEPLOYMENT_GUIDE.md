@@ -239,6 +239,136 @@ sudo bash migrate.sh \
 
 ---
 
+---
+
+## 链式迁移 (Chained Migration)
+
+### 什么是链式迁移？
+
+链式迁移是指在已迁移的基础上，再次迁移到新的参数。形成一条迁移链：
+```
+原始安装 (A) → 第1次迁移 (B) → 第2次迁移 (C) → 第3次迁移 (D) → ...
+```
+
+### 链式迁移的备份机制
+
+每个迁移节点都会产生两层备份：
+
+1. **上一个节点的二进制**：`${OLD_INSTALL_PATH}/${OLD_BIN_NAME}.bak_old`
+2. **上一个节点的配置目录**：`${OLD_CONFIG_PATH}.backup_${timestamp}`
+3. **新节点已有配置的冲突处理**：`${NEW_CONFIG_PATH}.backup_${timestamp}`
+
+### 实际案例：三次链式迁移
+
+#### 初始状态
+```
+/usr/local/XrayR/XrayR              ← 原始二进制
+/etc/XrayR/                         ← 原始配置
+  config.json
+  subscription.txt
+  ...
+```
+
+#### 第1次迁移（XrayR → cdn-service）
+```bash
+sudo bash migrate.sh \
+  --old-bin-name XrayR --old-install-path /usr/local/XrayR --old-config-path /etc/XrayR \
+  --to-bin-name cdn-service --to-install-path /opt/cdn --to-config-path /etc/cdn
+```
+
+**迁移后结果：**
+```
+/usr/local/XrayR/XrayR.bak_old              ← 备份的原始二进制
+/etc/XrayR.backup_1234567890/               ← 备份的原始配置
+  config.json
+  subscription.txt
+  ...
+
+/opt/cdn/cdn-service                        ← 新二进制
+/etc/cdn/                                   ← 新配置（从旧配置复制）
+  config.json
+  subscription.txt
+  .install_config                           ← 记录第1次迁移信息
+```
+
+#### 第2次迁移（cdn-service → hidden-daemon）
+```bash
+sudo bash migrate.sh \
+  --old-bin-name cdn-service --old-install-path /opt/cdn --old-config-path /etc/cdn \
+  --to-bin-name hidden-daemon --to-install-path /usr/lib/hidden --to-config-path /etc/hidden
+```
+
+**迁移后结果：**
+```
+/usr/local/XrayR/XrayR.bak_old              ← 第1代备份二进制（保留）
+/etc/XrayR.backup_1234567890/               ← 第1代备份配置（保留）
+
+/opt/cdn/cdn-service.bak_old                ← 备份的第1代二进制
+/etc/cdn.backup_1234567891/                 ← 备份的第1代配置
+  config.json
+  subscription.txt
+  .install_config                           ← 仍保留第1次迁移信息
+
+/usr/lib/hidden/hidden-daemon               ← 新二进制
+/etc/hidden/                                ← 新配置（从第1代配置复制）
+  config.json
+  subscription.txt
+  .install_config                           ← 记录第2次迁移信息
+```
+
+#### 第3次迁移（hidden-daemon → another-name）
+```bash
+sudo bash migrate.sh \
+  --old-bin-name hidden-daemon --old-install-path /usr/lib/hidden --old-config-path /etc/hidden \
+  --to-bin-name another-name --to-install-path /some/path --to-config-path /etc/another
+```
+
+**完整的迁移链结果：**
+```
+# 历代二进制备份
+/usr/local/XrayR/XrayR.bak_old              ← 第0代 (原始)
+/opt/cdn/cdn-service.bak_old                ← 第1代
+/usr/lib/hidden/hidden-daemon.bak_old       ← 第2代
+
+# 历代配置备份
+/etc/XrayR.backup_1234567890/               ← 第0代配置
+/etc/cdn.backup_1234567891/                 ← 第1代配置
+/etc/hidden.backup_1234567892/              ← 第2代配置
+
+# 当前部署
+/some/path/another-name                     ← 最新二进制
+/etc/another/                               ← 最新配置
+  .install_config                           ← 记录第3次迁移信息
+```
+
+### 回溯恢复
+
+若要回溯到某个历史版本：
+
+```bash
+# 回到第1代部署（cdn-service）
+sudo systemctl stop another
+cp -r /etc/cdn.backup_1234567891/* /etc/cdn/
+sudo systemctl stop another  # 停止当前服务
+cp /opt/cdn/cdn-service.bak_old /opt/cdn/cdn-service  # 若需恢复二进制
+sudo systemctl restart cdn
+
+# 回到第0代部署（原始 XrayR）
+sudo systemctl stop cdn
+cp -r /etc/XrayR.backup_1234567890/* /etc/XrayR/
+cp /usr/local/XrayR/XrayR.bak_old /usr/local/XrayR/XrayR
+sudo systemctl restart xrayr
+```
+
+### 链式迁移的使用场景
+
+1. **灾难恢复**：快速回到任何历史版本部署
+2. **A/B 测试**：在多个隐蔽配置间切换
+3. **持续隐匿**：定期改变迁移参数以增加难度
+4. **审计追踪**：`.install_config` 和备份目录提供完整操作历史
+
+---
+
 ## 常见问题 FAQ
 
 ### Q1: 迁移后旧的二进制文件怎么处理？
@@ -274,7 +404,36 @@ sudo bash migrate.sh \
 
 ### Q5: 多次迁移会怎样（A → B → C）？
 
-**A:** 每次迁移都会更新 `.install_config`，记录最新的迁移源和时间戳。旧的安装配置会被备份，可以链式迁移。
+**A:** 每次迁移都会更新 `.install_config`，记录最新的迁移源和时间戳。
+
+**备份机制：**
+- **二进制备份**：路径改变时，旧二进制保留为 `${old_path}/${old_name}.bak_old`
+- **配置备份**：路径改变时，旧配置完整保存为 `${old_path}.backup_${timestamp}`（支持链式回溯）
+- **新位置冲突**：新配置路径已有文件时，自动备份为 `${new_path}.backup_${timestamp}`
+
+**链式迁移例子：**
+```bash
+# 第1次迁移：XrayR → cdn-service
+sudo bash migrate.sh --old-bin-name XrayR --old-install-path /usr/local/XrayR \
+  --to-bin-name cdn-service --to-install-path /opt/cdn --to-config-path /etc/cdn
+
+# 结果备份：
+# /usr/local/XrayR/XrayR.bak_old           ← 第一代二进制
+# /etc/XrayR.backup_1234567890             ← 第一代配置
+
+# 第2次迁移：cdn-service → hidden-daemon
+sudo bash migrate.sh --old-bin-name cdn-service --old-install-path /opt/cdn \
+  --to-bin-name hidden-daemon --to-install-path /usr/lib/hidden --to-config-path /etc/hidden
+
+# 结果备份：
+# /opt/cdn/cdn-service.bak_old             ← 第二代二进制
+# /etc/cdn.backup_1234567891               ← 第二代配置
+# /etc/XrayR.backup_1234567890             ← 第一代配置（保留）
+
+# 第3次迁移：hidden-daemon → ...（可继续链式迁移）
+```
+
+**回溯方法**：需要回到某个历史版本时，可恢复相应的 `.backup_*` 目录。
 
 ---
 
@@ -323,9 +482,24 @@ sudo bash migrate.sh \
 ## 安全建议
 
 1. **权限管理**：`.install_config` 权限为 `600`（仅 root 可读）
-2. **日志清理**：迁移完成后清理 `.bash_history` 中的敏感参数
-3. **备份保留**：保留 `.bak_old` 备份文件以便恢复
-4. **定期更新**：通过 `install.sh` 的 `-s` 参数更新 service 文件（保持动态加载）
+2. **备份清理**：定期清理 `.backup_*` 目录和 `.bak_old` 文件以减少足迹（保留最近的备份以备恢复）
+3. **日志清理**：迁移完成后清理 `.bash_history` 中的敏感参数
+4. **定期更新**：通过 `install.sh` 的参数更新 service 文件（保持动态加载）
+
+### 备份清理示例
+
+```bash
+# 查看所有备份
+find /etc -name ".backup_*" -o -name "*.bak_old" 2>/dev/null
+
+# 删除旧备份（保留最近10天内的）
+find /etc /usr/local /opt -name ".backup_*" -type d -mtime +10 -exec rm -rf {} \;
+find /opt -name "*.bak_old" -type f -mtime +10 -delete
+
+# 清理 bash 历史
+history -c     # 清空当前会话历史
+cat /dev/null > ~/.bash_history  # 清空历史文件
+```
 
 ---
 

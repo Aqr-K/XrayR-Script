@@ -452,7 +452,23 @@ function migrate_config() {
     
     if [[ -d "$OLD_CONFIG_PATH" ]]; then
         mkdir -p "$NEW_CONFIG_PATH"
-        # 复制所有文件（除了 .install_config）
+        
+        # 备份新位置的旧配置（如果存在）
+        if [[ -n "$(ls -A "$NEW_CONFIG_PATH" 2>/dev/null)" ]]; then
+            local backup_ts=$(date +%s)
+            WARN "新配置路径已有文件，备份为 ${NEW_CONFIG_PATH}.backup_${backup_ts}"
+            mv "$NEW_CONFIG_PATH" "${NEW_CONFIG_PATH}.backup_${backup_ts}"
+            mkdir -p "$NEW_CONFIG_PATH"
+        fi
+        
+        # 备份旧配置路径（用于链式迁移回溯）
+        if [[ "$OLD_CONFIG_PATH" != "$NEW_CONFIG_PATH" ]]; then
+            local backup_ts=$(date +%s)
+            WARN "备份旧配置路径: ${OLD_CONFIG_PATH}.backup_${backup_ts}"
+            cp -r "$OLD_CONFIG_PATH" "${OLD_CONFIG_PATH}.backup_${backup_ts}" || true
+        fi
+        
+        # 复制配置文件（除了 .install_config）
         cp -r "$OLD_CONFIG_PATH"/* "$NEW_CONFIG_PATH/" 2>/dev/null || true
         INFO "配置文件已迁移到: $NEW_CONFIG_PATH"
     fi
