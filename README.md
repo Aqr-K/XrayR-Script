@@ -167,14 +167,14 @@ INSTALL_TIMESTAMP="2024-03-24T02:36:00Z"
 
 ## 支持的平台
 
-✅ **Linux (systemd)** - Debian, Ubuntu, CentOS, RHEL 等
-✅ **Linux (OpenRC)** - Alpine, Gentoo 等
-✅ **macOS (launchd)** - 通过 launchd 实现开机自启
-✅ **FreeBSD/DragonFly (rc.d)** - Server BSD 系统
-✅ **OpenBSD (rc.d)** - OpenBSD 专有配置
-✅ **Termux (termux-services)** - Android Termux 环境
+- ✅ **Linux (systemd)** - Debian, Ubuntu, CentOS, RHEL 等
+- ✅ **Linux (OpenRC)** - Alpine, Gentoo 等
+- ✅ **macOS (launchd)** - 通过 launchd 实现开机自启
+- ✅ **FreeBSD/DragonFly (rc.d)** - Server BSD 系统
+- ✅ **OpenBSD (rc.d)** - OpenBSD 专有配置
+- ✅ **Termux (termux-services)** - Android Termux 环境
 
-❌ **Windows** - 脚本不支持 Windows
+- ❌ **Windows** - 脚本不支持 Windows
 
 ---
 
