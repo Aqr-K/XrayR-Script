@@ -400,6 +400,72 @@ function set_xrayr_asset_name() {
     fi
 }
 
+# 校验自定义名称参数，防止注入生成的 shell 脚本 / systemd unit
+# 功能:
+#   1. 限制 XRAY_BIN_NAME / XRAY_PROCESS_NAME / XRAY_SERVICE_NAME 只能包含安全字符。
+#   2. 这些值会写入 .install_config 并被 launcher / systemd 解析，必须严格校验。
+# 允许字符: [A-Za-z0-9._-]，长度 1-64
+function validate_custom_names() {
+    local name val
+    for name in XRAY_BIN_NAME XRAY_PROCESS_NAME XRAY_SERVICE_NAME; do
+        val="${!name}"
+        if [[ -z "$val" ]]; then
+            ERROR "$name 不能为空。"
+            exit 1
+        fi
+        if [[ ${#val} -gt 64 ]]; then
+            ERROR "$name 长度超过 64 个字符: $val"
+            exit 1
+        fi
+        if [[ ! "$val" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            ERROR "$name 只能包含字母、数字、点、下划线、短横线, 当前值: $val"
+            exit 1
+        fi
+    done
+    # XRAY_PROCESS_NAME 超过 15 字符时提示: /proc/<pid>/comm 被内核截断为 15 字符，
+    # 且 comm 取自真实二进制名，并不等于 argv[0]，无法通过 exec -a 修改。
+    if [[ ${#XRAY_PROCESS_NAME} -gt 15 ]]; then
+        WARN "XRAY_PROCESS_NAME 长度 ${#XRAY_PROCESS_NAME} > 15: ps aux 会显示完整名, 但内核 /proc/<pid>/comm 会截断。"
+    fi
+}
+
+# 生成启动器脚本 (launcher.sh)
+# 功能:
+#   1. 将真正的启动命令放到一个独立的 bash 脚本里, 避免 /bin/sh -c '...' 的多层转义与 dash/busybox 兼容问题。
+#   2. 所有 service 后端 (systemd / openrc / launchd / rc.d / termux) 都只需 ExecStart 指向这个脚本即可。
+# 输出:
+#   - 在 ${XRAYR_BIN_DIR}/launcher.sh 生成可执行脚本 (权限 755)
+function create_launcher_script() {
+    local launcher_path="${XRAYR_BIN_DIR}/launcher.sh"
+    # 使用 cat + 单引号 heredoc 避免任何变量在生成时被展开; 变量在 launcher 运行时再 source 获得。
+    cat > "$launcher_path" <<LAUNCHER_EOF
+#!/usr/bin/env bash
+# 由 install-new.sh 生成; 请勿手工修改。如需修改变量, 编辑同目录下的 .install_config。
+set -eu
+
+# 读取安装时保存的变量 (XRAY_BIN_NAME / XRAY_PROCESS_NAME / XRAYR_BIN_DIR / CONFIG_DIR 等)
+INSTALL_CONFIG="${CONFIG_DIR}/.install_config"
+if [[ ! -f "\$INSTALL_CONFIG" ]]; then
+    echo "launcher: 未找到 \$INSTALL_CONFIG" >&2
+    exit 1
+fi
+# shellcheck disable=SC1090
+source "\$INSTALL_CONFIG"
+
+BIN="\${XRAYR_BIN_DIR}/\${XRAY_BIN_NAME}"
+if [[ ! -x "\$BIN" ]]; then
+    echo "launcher: 二进制不存在或不可执行: \$BIN" >&2
+    exit 1
+fi
+
+# exec -a: 修改 argv[0], 影响 ps aux / /proc/<pid>/cmdline
+# 注意: /proc/<pid>/comm 仍由内核按二进制文件名确定, 不会变成 XRAY_PROCESS_NAME
+exec -a "\${XRAY_PROCESS_NAME}" "\$BIN" --config "\${CONFIG_DIR}/config.yml" "\$@"
+LAUNCHER_EOF
+    chmod 755 "$launcher_path"
+    INFO "启动器脚本已生成: $launcher_path"
+}
+
 # 保存安装配置到文件
 # 功能:
 #   1. 创建配置目录（如果不存在）。
@@ -866,14 +932,14 @@ function setup_systemd_service() {
 		Type=simple
 		Restart=always
 		RestartSec=5s
-		ExecStart=/bin/sh -c 'source ${CONFIG_DIR}/.install_config && exec -a "\$XRAY_PROCESS_NAME" \$XRAYR_BIN_DIR/\$XRAY_BIN_NAME --config \$CONFIG_DIR/config.yml'
+		ExecStart=${XRAYR_BIN_DIR}/launcher.sh
 		WorkingDirectory=${XRAYR_BIN_DIR}/
 		[Install]
 		WantedBy=multi-user.target
 	EOF
-    $priv_cmd chmod 644 "$service_path" 
-    $priv_cmd systemctl enable ${XRAY_SERVICE_NAME}
+    $priv_cmd chmod 644 "$service_path"
     $priv_cmd systemctl daemon-reload
+    $priv_cmd systemctl enable ${XRAY_SERVICE_NAME}
     INFO "systemd 服务设置完成。"
 }
 
@@ -891,8 +957,7 @@ function setup_openrc_service() {
     fi
     $priv_cmd tee "$service_path" >/dev/null <<-EOF
 		#!/sbin/openrc-run
-		command="/bin/sh"
-		command_args="-c 'source ${CONFIG_DIR}/.install_config && exec -a \"\\\$XRAY_PROCESS_NAME\" \\\$XRAYR_BIN_DIR/\\\$XRAY_BIN_NAME --config \\\$CONFIG_DIR/config.yml'"
+		command="${XRAYR_BIN_DIR}/launcher.sh"
 		command_background=true
 		directory="${XRAYR_BIN_DIR}"
 		pidfile="/run/\${RC_SVCNAME}.pid"
@@ -921,9 +986,7 @@ function setup_launchd_service() {
 		    <key>Label</key><string>com.${XRAY_SERVICE_NAME}</string>
 		    <key>ProgramArguments</key>
 		    <array>
-		        <string>/bin/sh</string>
-		        <string>-c</string>
-		        <string>source ${CONFIG_DIR}/.install_config && exec -a "\$XRAY_PROCESS_NAME" \$XRAYR_BIN_DIR/\$XRAY_BIN_NAME --config \$CONFIG_DIR/config.yml</string>
+		        <string>${XRAYR_BIN_DIR}/launcher.sh</string>
 		    </array>
 		    <key>WorkingDirectory</key><string>${XRAYR_BIN_DIR}/</string>
 		    <key>RunAtLoad</key><true/>
@@ -932,7 +995,9 @@ function setup_launchd_service() {
 		</plist>
 	EOF
     $priv_cmd chmod 644 "$plist_path"
+    # 先 unload 旧的 (如果存在), 再 load 新的, 否则新安装根本不会启动
     $priv_cmd launchctl unload "$plist_path" 2>/dev/null || true
+    $priv_cmd launchctl load "$plist_path"
     INFO "launchd 服务设置完成。"
 }
 
@@ -951,8 +1016,8 @@ function setup_rcd_service_freebsd() {
 		. /etc/rc.subr
 		name="${XRAY_SERVICE_NAME}"
 		rcvar="${XRAY_SERVICE_NAME}_enable"
-		command="/bin/sh"
-		command_args="-c 'source ${CONFIG_DIR}/.install_config && exec -a \"\\\$XRAY_PROCESS_NAME\" \\\$XRAYR_BIN_DIR/\\\$XRAY_BIN_NAME --config \\\$CONFIG_DIR/config.yml &'"
+		command="${XRAYR_BIN_DIR}/launcher.sh"
+		command_args="&"
 		load_rc_config \$name
 		run_rc_command "\$1"
 	EOF
@@ -975,8 +1040,7 @@ function setup_rcd_service_openbsd() {
     fi
     $priv_cmd tee "$rcd_path" >/dev/null <<-EOF
 		#!/bin/ksh
-		daemon="/bin/sh"
-		daemon_flags="-c 'source ${CONFIG_DIR}/.install_config && exec -a \"\\\$XRAY_PROCESS_NAME\" \\\$XRAYR_BIN_DIR/\\\$XRAY_BIN_NAME --config \\\$CONFIG_DIR/config.yml'"
+		daemon="${XRAYR_BIN_DIR}/launcher.sh"
 		. /etc/rc.d/rc.subr
 		rc_cmd "\$1"
 	EOF
@@ -996,7 +1060,7 @@ function setup_termux_service() {
     mkdir -p "$service_dir" "$service_dir/log"
     cat > "$service_dir/run" <<-EOF
 		#!/data/data/com.termux/files/usr/bin/sh
-		exec /bin/sh -c 'source ${CONFIG_DIR}/.install_config && exec -a "\$XRAY_PROCESS_NAME" \$XRAYR_BIN_DIR/\$XRAY_BIN_NAME --config \$CONFIG_DIR/config.yml'
+		exec ${XRAYR_BIN_DIR}/launcher.sh
 	EOF
     chmod +x "$service_dir/run"
     cat > "$service_dir/log/run" <<-EOF
@@ -1368,6 +1432,8 @@ function print_management_usage() {
 # 全新安装 XrayR
 function install_all() {
     INFO "开始全新安装 XrayR..."
+    # 校验用户自定义的 bin/process/service 名, 防止注入与非法字符
+    validate_custom_names
     # 安装基础依赖
     install_dependencies
     # 安装 acme.sh（如果需要）
@@ -1376,12 +1442,14 @@ function install_all() {
     parse_xrayr_repo_url
     # 覆写 XrayR 安装路径、 下载文件名、配置目录
     set_xrayr_install_path
-    set_xrayr_asset_name 
+    set_xrayr_asset_name
     set_config_install_path
     # 保存安装配置（新增）
     save_install_config
     # 下载并解压安装 XrayR
     download_and_extract_xrayr
+    # 生成 launcher.sh (所有 service 后端都指向它)
+    create_launcher_script
     # 下载 geoip 与 geosite
     install_geo
     # 安装自定义配置文件
@@ -1396,6 +1464,8 @@ function install_all() {
 
 # 仅更新内核
 function update_core_only() {
+    # 校验用户自定义名 (可能从 CLI 覆盖)
+    validate_custom_names
     # 安装基础依赖
     install_dependencies
     # 安装 acme.sh（如果需要）
@@ -1408,6 +1478,8 @@ function update_core_only() {
     set_config_install_path
     # 下载并解压安装 XrayR
     download_and_extract_xrayr
+    # 重新生成 launcher.sh (若变量有改动)
+    create_launcher_script
     # 设置服务
     setup_service
     # 启动服务

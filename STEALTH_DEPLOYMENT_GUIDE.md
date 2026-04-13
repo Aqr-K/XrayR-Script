@@ -4,6 +4,34 @@
 
 ---
 
+## ⚠️ 先读这一节: 「隐蔽」的真实能力边界
+
+脚本通过 **二进制改名 + `exec -a` 修改 argv[0]** 实现进程名伪装。它能干什么、不能干什么, 请先看清楚:
+
+| 观测点 | 是否能被伪装 | 实际显示 |
+|--------|-------------|----------|
+| `ps aux` / `top` / `htop` (cmdline) | ✅ | `XRAY_PROCESS_NAME` (例如 `nginx`) |
+| `/proc/<pid>/cmdline` | ✅ | 同上 |
+| `pgrep -f nginx` | ✅ | 能匹配 |
+| **`/proc/<pid>/comm`** | ❌ | **`XRAY_BIN_NAME`** (例如 `cdn-service`), 由内核按真实二进制名决定 |
+| `ps -eo comm` / `pgrep nginx` (默认) | ❌ | 同上 |
+| **`readlink /proc/<pid>/exe`** | ❌ | **真实二进制绝对路径** (例如 `/opt/cdn/cdn-service`) |
+| auditd / SELinux / eBPF 审计 | ❌ | execve 原始参数, 逃不掉 |
+| systemd `journalctl -u <service>` `_EXE=` | ❌ | 真实二进制路径 |
+
+### 这意味着:
+
+- **够用场景**: 面板方/VPS 提供商随手 `ps aux` 看服务, 或按 cmdline 关键字 grep 的粗略巡查
+- **不够用场景**: 懂行运维 `ls -l /proc/*/exe | grep -v -E '^(/usr|/lib)'`, 或任何开启审计的服务器
+- **反而增加红旗**: 如果三个字段不一致 (cmdline=nginx, comm=cdn-service, exe=/opt/cdn/cdn-service), 暴露的异常信号比不改还明显
+
+### 建议
+把 `XRAY_BIN_NAME` 也取成和 `XRAY_PROCESS_NAME` 一致的合理系统进程名 (例如都叫 `chronyd` 或 `systemd-timesyncd`), 让 comm/cmdline 保持一致; 不要一个叫 `cdn-service` 一个叫 `nginx`。
+
+`XRAY_PROCESS_NAME` 长度建议 ≤ 15 字符 (内核 `TASK_COMM_LEN` 上限), 超长会被截断。
+
+---
+
 ## 场景 1：从无 .install_config 的旧安装迁移到隐蔽部署
 
 ### 前提条件
